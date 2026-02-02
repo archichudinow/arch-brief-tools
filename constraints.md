@@ -1,15 +1,16 @@
 # constraints.md
-# Parametric Constraints (Algorithmic)
+# Parametric & Urban Constraints (Algorithmic)
 
-Constraints are pure numeric inputs.
-They are deterministic, non-AI, and globally applied to all variants.
+Constraints are global, numeric, and deterministic.
+They apply across all buildings, towers, and variants.
 
 ---
 
 ## Site Constraints
 - `site_area`
-- `site_shape_type` (abstract: rectangular / irregular)
 - `buildable_area_ratio`
+- `site_shape_type` (abstract)
+- `max_building_coverage_area`
 
 ---
 
@@ -18,6 +19,8 @@ They are deterministic, non-AI, and globally applied to all variants.
 - `max_footprint_ratio`
 - `absolute_max_footprint_area`
 - `min_footprint_area`
+- `tower_plate_ratio_max`
+- `podium_footprint_ratio_max`
 
 ---
 
@@ -25,7 +28,17 @@ They are deterministic, non-AI, and globally applied to all variants.
 - `min_total_height`
 - `max_total_height`
 - `height_range_allowed`
-- `max_height_strict` (boolean)
+- `max_height_strict`
+- `tower_height_limit`
+- `podium_height_limit`
+
+---
+
+## Building Count Constraints
+- `min_building_count`
+- `max_building_count`
+- `max_tower_count`
+- `max_podium_count`
 
 ---
 
@@ -34,6 +47,8 @@ They are deterministic, non-AI, and globally applied to all variants.
 - `max_levels`
 - `preferred_levels`
 - `level_count_range`
+- `tower_level_range`
+- `podium_level_range`
 
 ---
 
@@ -47,17 +62,19 @@ They are deterministic, non-AI, and globally applied to all variants.
 
 ## Program Allocation Constraints
 - `total_program_area`
+- `area_tolerance_percentage`
+- `min_area_per_building`
+- `max_area_per_building`
 - `min_area_per_level`
 - `max_area_per_level`
-- `area_tolerance_percentage`
 
 ---
 
-## Setback & Massing Constraints
+## Urban Massing Constraints
 - `stepback_start_level`
 - `stepback_ratio`
-- `tower_plate_ratio`
-- `podium_levels_max`
+- `tower_to_podium_area_ratio`
+- `max_slenderness_ratio` (advisory)
 
 ---
 
@@ -65,19 +82,28 @@ They are deterministic, non-AI, and globally applied to all variants.
 - `max_variants_generated`
 - `discard_invalid_variants`
 - `score_variants_by_efficiency`
-- `prefer_compact_mass`
+- `score_variants_by_compactness`
+- `score_variants_by_height_balance`
 
 ---
 
 ## Validation Rules
-- footprint * levels ≥ total_program_area
-- total_height ≤ max_total_height
+- sum(program_areas) ≤ sum(buildable_areas)
 - footprint_area ≤ site_area * max_footprint_ratio
+- total_height ≤ max_total_height
+- building_count ≤ max_building_count
 - violations must be flagged, not auto-corrected
 
 ---
 
+## Output Constraints
+- all numeric values must be exportable to Excel
+- per-variant totals and subtotals required
+- color mapping must match functional groups
+
+---
+
 ## Notes
-- Constraints are evaluated before visualization.
-- All generated variants must fully comply.
-- Constraints override AI suggestions and user preferences.
+- Constraints override rules and AI suggestions.
+- All variants must fully comply before visualization.
+
