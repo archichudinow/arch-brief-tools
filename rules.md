@@ -1,8 +1,29 @@
-# rules_assignment.md
-# Functional Group Rule Assignment
+# rules.md
+# Functional & Urban Program Rules
 
-Each functional group can be assigned a set of rules.
-Rules are adjustable by user and may be initially proposed by AI.
+Rules apply per functional group.
+They guide stacking, building separation, and placement logic.
+Rules constrain algorithms but do not generate geometry.
+
+---
+
+## Building Distribution Rules
+- `single_building_only`
+- `multiple_buildings_allowed`
+- `standalone_building_preferred`
+- `shared_building_allowed`
+- `max_building_count: N`
+
+---
+
+## Podium & Tower Rules
+- `podium_required`
+- `podium_allowed`
+- `podium_only`
+- `tower_allowed`
+- `tower_required`
+- `tower_only`
+- `max_tower_count: N`
 
 ---
 
@@ -11,6 +32,7 @@ Rules are adjustable by user and may be initially proposed by AI.
 - `ground_floor_preferred`
 - `upper_floors_only`
 - `podium_only`
+- `tower_only`
 - `no_basement`
 - `basement_allowed`
 
@@ -18,6 +40,7 @@ Rules are adjustable by user and may be initially proposed by AI.
 
 ## Splitting & Continuity Rules
 - `splittable_across_levels`
+- `splittable_across_buildings`
 - `must_be_contiguous`
 - `single_level_only`
 - `max_contiguous_levels: N`
@@ -30,16 +53,19 @@ Rules are adjustable by user and may be initially proposed by AI.
 - `min_area_per_level`
 - `max_area_per_level`
 - `even_area_distribution`
-- `front_loaded_area` (larger area at lower levels)
-- `top_loaded_area` (larger area at upper levels)
+- `front_loaded_area`
+- `top_loaded_area`
+- `core_area_ratio` (advisory)
 
 ---
 
-## Adjacency & Stacking Rules
+## Adjacency & Urban Logic Rules
 - `must_be_below: [group]`
 - `must_be_above: [group]`
+- `must_share_podium_with: [group]`
 - `avoid_adjacency_with: [group]`
-- `prefer_direct_access_from_ground`
+- `prefer_street_frontage`
+- `prefer_direct_ground_access`
 - `buffer_required_above`
 
 ---
@@ -62,7 +88,7 @@ Rules are adjustable by user and may be initially proposed by AI.
 
 ---
 
-## Public / Private Logic
+## Public / Private Rules
 - `public_access_required`
 - `controlled_access`
 - `private_only`
@@ -73,19 +99,21 @@ Rules are adjustable by user and may be initially proposed by AI.
 ## Variant Control Rules
 - `include_in_all_variants`
 - `optional_program`
-- `allow_program_swap`
-- `lock_position`
+- `allow_program_relocation`
+- `lock_building_assignment`
+- `lock_vertical_position`
 
 ---
 
 ## AI Guidance Rules (Non-Deterministic)
 - `ai_reasoning_required`
-- `ai_explain_tradeoffs`
-- `ai_suggest_alternatives`
+- `ai_explain_urban_tradeoffs`
+- `ai_suggest_podium_tower_split`
+- `ai_suggest_multi_building_options`
 
 ---
 
 ## Notes
-- Rules constrain but do not generate geometry.
 - Conflicting rules must be flagged, not resolved silently.
-- Deterministic solvers must always override AI suggestions when constraints are violated.
+- Deterministic solvers always override AI suggestions.
+- All rules must be exportable as structured data (JSON / Excel).
