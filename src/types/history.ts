@@ -45,4 +45,11 @@ export type ActionType =
   | 'remove_from_group'
   | 'ai_apply'
   | 'import'
-  | 'batch';
+  | 'batch'
+  | 'parse-brief'
+  | 'ai-create-areas'
+  | 'ai-split'
+  | 'ai-merge'
+  | 'ai-update'
+  | 'ai-create-groups'
+  | 'ai-assign';

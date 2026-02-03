@@ -1,6 +1,7 @@
-import { useProjectStore, useHistoryStore } from '@/stores';
+import { useProjectStore, useHistoryStore, useChatStore } from '@/stores';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -16,6 +17,7 @@ import {
   Undo2,
   Redo2,
   FilePlus,
+  Sparkles,
 } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -33,6 +35,10 @@ export function Header() {
   const redo = useHistoryStore((s) => s.redo);
 
   const nodes = useProjectStore((s) => s.nodes);
+  
+  const isOpen = useChatStore((s) => s.isOpen);
+  const toggleChat = useChatStore((s) => s.toggleChat);
+  const pendingProposals = useChatStore((s) => s.pendingProposals);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isEditingName, setIsEditingName] = useState(false);
@@ -155,6 +161,24 @@ export function Header() {
 
       {/* Right: Actions */}
       <div className="flex items-center gap-2">
+        <Button
+          variant={isOpen ? 'default' : 'outline'}
+          size="sm"
+          onClick={toggleChat}
+          className="relative"
+        >
+          <Sparkles className="h-4 w-4 mr-2" />
+          AI Chat
+          {pendingProposals.length > 0 && (
+            <Badge
+              variant="secondary"
+              className="absolute -top-2 -right-2 h-5 w-5 p-0 flex items-center justify-center text-xs"
+            >
+              {pendingProposals.length}
+            </Badge>
+          )}
+        </Button>
+        
         <Button variant="outline" size="sm" onClick={handleExport}>
           <Download className="h-4 w-4 mr-2" />
           Export

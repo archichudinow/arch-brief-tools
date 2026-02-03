@@ -3,60 +3,95 @@
 ## Core Principle
 AI is used for **reasoning and transformation**, not storage or geometry.
 
-The system avoids sending full project context unless required.
+The system uses a **compressed project context** for all AI decisions.
+
+---
+
+## Two-Phase AI Interaction
+
+### Phase 1: Brief Processing
+- User pastes text brief
+- AI parses and extracts areas
+- AI generates **project context summary** (~200-500 tokens)
+- AI proposes additional areas if missing
+- User reviews and confirms
+
+### Phase 2: Interactive Chat
+- User sends questions or commands
+- Context includes: project summary + selected items
+- AI responds with answers or proposals
+- User accepts/modifies/rejects proposals
+
+---
+
+## Project Context Summary
+
+Generated during brief processing. Stored in `project.meta.aiContext`.
+
+Contains:
+- Project type (hotel, office, residential, mixed-use, etc.)
+- Total program area
+- Key constraints mentioned
+- Primary program components
+- Notable requirements
+
+Example:
+```
+"Mixed-use development, 45,000m² total. Hotel (200 rooms) + 
+Office (Grade A, 15,000m²) + Retail podium (5,000m²). 
+Green building certification required. Urban site, 
+height restriction 120m. Premium positioning."
+```
+
+This context is sent with every AI request.
 
 ---
 
 ## Context Scoping Rules
 
-### Small Actions (Cheap / Fast Models)
-Use minimal context:
-- rename area
-- adjust count
-- split partitions
-- simple breakdowns
+### Minimal Context (Fast/Cheap)
+Use for:
+- Rename suggestions
+- Unit adjustments
+- Simple Q&A
 
 Context sent:
-- selected node(s)
-- brief excerpt
-- local notes only
+- Project context summary
+- Selected node(s) summary
 
-Models:
-- fast / low-cost GPT variants
+Models: Fast/cheap GPT variants
 
 ---
 
-### Medium Actions
-Examples:
-- breaking down large abstract areas
-- clustering rooms
-- proposing variants for one program
+### Standard Context
+Use for:
+- Area breakdowns
+- Split proposals
+- Grouping suggestions
 
-Context:
-- selected nodes
-- related clusters
-- relevant brief sections
+Context sent:
+- Project context summary
+- Selected nodes with details
+- Related group info
 
-Models:
-- standard GPT model
+Models: Standard GPT
 
 ---
 
-### Heavy Actions (Expensive / Explicit)
-Examples:
-- full brief reinterpretation
-- re-normalization
-- architectural reasoning across programs
+### Full Context (Expensive)
+Use for:
+- Brief re-parsing
+- Full program analysis
+- Cross-program optimization
 
-Context:
-- full normalized state
-- brief
-- group summaries
+Context sent:
+- Project context summary
+- Full area state
+- All groups
+- Original brief excerpt
 
-Models:
-- advanced reasoning models
-
-User must confirm before execution.
+Models: Advanced reasoning models
+User confirmation required.
 
 ---
 

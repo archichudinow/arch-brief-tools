@@ -3,67 +3,106 @@
 ## Purpose
 Define a **controlled interaction layer** between user, AI, and state.
 
-Avoid free-form AI mutation.
+AI proposes changes. User confirms before application.
 
 ---
 
-## Command Structure
+## Command Categories
 
-Each AI request resolves into:
-- intent
-- scope
-- proposed changes
-- explanation
+### 1. Parse Brief
+"Parse this brief and create areas"
 
-AI NEVER applies changes directly.
+Input:
+- Raw brief text
 
----
-
-## Example Commands
-
-### Breakdown
-"Break Flat (40 units) into 1BHK and 2BHK using brief context"
-
-Intent:
-- transform area node
-Scope:
-- selected AreaNode
 Output:
-- proposed variants + counts
+- Parsed areas with names, sizes, counts
+- Brief notes attached to each area
+- AI suggestions for missing areas
+- Project context summary
 
 ---
 
-### Split
-"Split these flats into 5 / 5 / 20 units"
+### 2. Split Area
+"Split this office into functional areas"
 
-Intent:
-- partition
-Scope:
-- selected AreaNode
+Input:
+- Selected area node
+- Optional constraints (e.g., "into 3 areas")
+
 Output:
-- partitions only
+- Proposed child areas
+- Total matches original
+- Reasoning provided
 
 ---
 
-### Merge
-"Merge these rooms into one abstract area"
+### 3. Structured Split
+"Split 10000m² hotel into:
+- spa
+- 2 restaurants
+- rooms of 40m² and 60m²"
 
-Intent:
-- abstraction
-Scope:
-- selected nodes
+Input:
+- Selected area node
+- User-defined structure
+
 Output:
-- new AreaNode proposal
+- Areas matching structure
+- AI fills in sizes/counts
+- Assumptions listed
 
 ---
 
-### Normalize
-"Fix naming and unit consistency"
+### 4. Merge Areas
+"Merge these meeting rooms"
 
-Intent:
-- normalize
-Scope:
-- selected nodes or whole area layer
+Input:
+- Selected area nodes
+
+Output:
+- Single combined area
+- Name suggestion
+- Total area preserved
+
+---
+
+### 5. Balance Proportions
+"Balance to 60% 1BHK, 40% 2BHK"
+
+Input:
+- Selected area nodes
+- Target proportions
+
+Output:
+- Adjusted counts
+- Area/units preserved per mode
+
+---
+
+### 6. Propose Grouping
+"Organize these areas into groups"
+
+Input:
+- Selected area nodes
+
+Output:
+- Proposed groups
+- Member assignments
+- Group names/colors
+
+---
+
+### 7. Q&A (No State Change)
+"What's typical lobby size for 200-room hotel?"
+
+Input:
+- Question text
+- Project context
+
+Output:
+- Text answer only
+- No proposals
 
 ---
 

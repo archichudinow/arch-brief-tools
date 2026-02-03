@@ -3,3 +3,4 @@ export * from './project';
 export * from './areas';
 export * from './groups';
 export * from './history';
+export * from './chat';

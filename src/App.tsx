@@ -2,7 +2,8 @@ import { Toaster } from '@/components/ui/sonner';
 import { Header, StepBar, AreaGroupPanel } from '@/components/layout';
 import { AreaTree, AreaInspector } from '@/components/area-tools';
 import { GroupInspector } from '@/components/group-tools';
-import { useProjectStore, useHistoryStore, useUIStore } from '@/stores';
+import { ChatPanel } from '@/components/chat';
+import { useProjectStore, useHistoryStore, useUIStore, useChatStore } from '@/stores';
 import { useEffect } from 'react';
 
 function App() {
@@ -11,6 +12,9 @@ function App() {
   const groups = useProjectStore((s) => s.groups);
   const selectedNodeIds = useUIStore((s) => s.selectedNodeIds);
   const selectedGroupIds = useUIStore((s) => s.selectedGroupIds);
+  const isChatOpen = useChatStore((s) => s.isOpen);
+  const toggleChat = useChatStore((s) => s.toggleChat);
+  const closeChat = useChatStore((s) => s.closeChat);
 
   // Initialize history with initial state
   useEffect(() => {
@@ -48,11 +52,20 @@ function App() {
           });
         }
       }
+      // Toggle AI Chat: Cmd+K
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        toggleChat();
+      }
+      // Close chat: Escape
+      if (e.key === 'Escape' && isChatOpen) {
+        closeChat();
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [isChatOpen, toggleChat, closeChat]);
 
   return (
     <div className="h-screen flex flex-col bg-background">
@@ -96,6 +109,9 @@ function App() {
             </>
           )}
         </aside>
+        
+        {/* AI Chat Panel */}
+        <ChatPanel />
       </main>
 
       <Toaster position="bottom-right" />

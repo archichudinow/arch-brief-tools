@@ -13,12 +13,34 @@ State must be deterministic and diff-friendly.
 
 ## High-Level State Layers
 
-1. Project Meta
-2. Raw Inputs
-3. Area Layer (Nodes, Clusters, Partitions)
+1. Project Meta (including AI context)
+2. Raw Inputs (original brief)
+3. Area Layer (Nodes only, no clusters)
 4. Grouping Layer
 5. Variant / Massing Layer
 6. UI State (non-authoritative)
+7. Chat State (messages, proposals)
+
+---
+
+## Project Meta
+
+```typescript
+interface ProjectMeta {
+  id: UUID;
+  name: string;
+  createdAt: Date;
+  updatedAt: Date;
+  currentStep: number;              // 0=Input, 1=Areas, 2=Groups, 3=Massing
+  
+  // AI Context
+  aiContext: string | null;         // Short project summary for AI
+  originalBrief: string | null;     // Full brief text (optional)
+}
+```
+
+The `aiContext` is generated during brief processing and used for all AI interactions.
+Typically 200-500 tokens summarizing project type, scale, and key constraints.
 
 ---
 
@@ -28,70 +50,69 @@ State must be deterministic and diff-friendly.
 Represents a semantic space type.
 
 Fields:
-- id
-- name
-- area_per_unit
-- count
-- ai_note
-- user_note
-- locked_fields (optional)
+- id: UUID
+- name: string
+- areaPerUnit: number (m²)
+- count: number
+- briefNote?: string          // Excerpt from original brief
+- aiNote?: string             // AI-generated note
+- userNote?: string           // User-added note
+- lockedFields?: string[]     // Fields locked from AI modification
 
 Derived:
-- total_area = area_per_unit × count
-
----
-
-### AreaPartition
-Represents a distribution of an AreaNode.
-
-Fields:
-- id
-- parent_area_node_id
-- count
-- label
-- ai_note
-- user_note
-
-Rules:
-- partitions sum to parent count
-- deleting partition restores count to parent
-
----
-
-### AreaCluster
-Optional early aggregation of AreaNodes.
-
-Fields:
-- id
-- name
-- member_area_node_ids
-- ai_note
-- user_note
-
-Clusters do NOT affect grouping logic.
+- totalArea = areaPerUnit × count
 
 ---
 
 ### Group
-Represents planning logic.
+Represents planning/program grouping.
 
 Fields:
-- id
-- name
-- members (AreaNode IDs or Partition IDs)
-- rules
-- ai_note
-- user_note
+- id: UUID
+- name: string
+- color: string
+- members: UUID[]             // Array of AreaNode IDs
+- aiNote?: string
+- userNote?: string
 
-Groups are always flat.
+Groups are always flat. No nested groups.
+
+---
+
+## Chat State (Separate Store)
+
+```typescript
+interface ChatState {
+  messages: Message[];
+  pendingProposals: Proposal[];
+  isOpen: boolean;
+  isLoading: boolean;
+}
+
+interface Message {
+  id: UUID;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  timestamp: Date;
+  proposals?: Proposal[];
+}
+
+interface Proposal {
+  id: UUID;
+  type: ProposalType;
+  status: 'pending' | 'accepted' | 'rejected';
+  data: ProposalData;
+}
+```
+
+Chat state is ephemeral (not persisted with project by default).
 
 ---
 
 ## Referential Integrity Rules
-- No duplicated ownership
+- No duplicated ownership (node can be in max 1 group)
 - No nested groups
-- Partitions cannot exist without parent
-- Groups reference, never copy
+- Groups reference node IDs, never copy data
 
 ---
 
