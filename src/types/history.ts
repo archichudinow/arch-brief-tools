@@ -1,0 +1,48 @@
+import type { UUID, Timestamp } from './project';
+import type { AreaNode } from './areas';
+import type { Group } from './groups';
+
+// ============================================
+// HISTORY STATE
+// ============================================
+
+export interface HistoryState {
+  snapshots: StateSnapshot[];
+  currentIndex: number;
+}
+
+export interface StateSnapshot {
+  id: UUID;
+  timestamp: Timestamp;
+  label: string;
+  actionType: ActionType;
+  // The actual state data
+  data: SnapshotData;
+}
+
+export interface SnapshotData {
+  nodes: Record<UUID, AreaNode>;
+  groups: Record<UUID, Group>;
+}
+
+export type ActionType =
+  | 'initial'
+  | 'create_node'
+  | 'update_node'
+  | 'delete_node'
+  | 'duplicate_node'
+  | 'merge_nodes'
+  | 'split_node'
+  | 'split_by_quantity'
+  | 'split_by_equal'
+  | 'split_by_area'
+  | 'split_by_proportion'
+  | 'merge_to_single'
+  | 'create_group'
+  | 'update_group'
+  | 'delete_group'
+  | 'assign_to_group'
+  | 'remove_from_group'
+  | 'ai_apply'
+  | 'import'
+  | 'batch';

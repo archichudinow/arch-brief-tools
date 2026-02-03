@@ -1,3 +1,3 @@
-export { AppLayout } from './AppLayout';
-export { StepTimeline } from './StepTimeline';
-export { PreviewPanel } from './PreviewPanel';
+export { Header } from './Header';
+export { StepBar } from './StepBar';
+export { AreaGroupPanel } from './AreaGroupPanel';
