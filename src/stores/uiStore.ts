@@ -24,6 +24,8 @@ interface UIState {
   activePanel: PanelType;
   inspectorTab: InspectorTab;
   showAiChat: boolean;
+  leftPanelCollapsed: boolean;
+  rightPanelCollapsed: boolean;
   
   // Board interaction mode
   isAddingComment: boolean;
@@ -45,6 +47,8 @@ interface UIState {
   setActivePanel: (panel: PanelType) => void;
   setInspectorTab: (tab: InspectorTab) => void;
   toggleAiChat: () => void;
+  toggleLeftPanel: () => void;
+  toggleRightPanel: () => void;
   
   // Actions - Board interaction
   setAddingComment: (adding: boolean) => void;
@@ -66,6 +70,8 @@ export const useUIStore = create<UIState>()(
     activePanel: 'inspector',
     inspectorTab: 'details',
     showAiChat: false,
+    leftPanelCollapsed: false,
+    rightPanelCollapsed: false,
     isAddingComment: false,
     detailLevel: 'standard',
 
@@ -154,6 +160,18 @@ export const useUIStore = create<UIState>()(
     toggleAiChat: () => {
       set((state) => {
         state.showAiChat = !state.showAiChat;
+      });
+    },
+
+    toggleLeftPanel: () => {
+      set((state) => {
+        state.leftPanelCollapsed = !state.leftPanelCollapsed;
+      });
+    },
+
+    toggleRightPanel: () => {
+      set((state) => {
+        state.rightPanelCollapsed = !state.rightPanelCollapsed;
       });
     },
 

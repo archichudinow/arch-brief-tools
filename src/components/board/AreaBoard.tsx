@@ -547,20 +547,36 @@ export function AreaBoard() {
     }
   }, [isPanning, selectionBox, layout.groups, groupPositions, selectGroups, selectNodes]);
 
-  // Mouse wheel zoom - use native event listener to properly prevent default
+  // Mouse wheel zoom toward cursor - use native event listener to properly prevent default
   useEffect(() => {
     const wrapper = wrapperRef.current;
     if (!wrapper) return;
     
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
+      
+      // Get cursor position relative to wrapper
+      const rect = wrapper.getBoundingClientRect();
+      const cursorX = e.clientX - rect.left;
+      const cursorY = e.clientY - rect.top;
+      
+      // Calculate new scale
       const delta = e.deltaY > 0 ? 0.9 : 1.1;
-      setScale((s) => Math.min(Math.max(s * delta, 0.3), 3));
+      const newScale = Math.min(Math.max(scale * delta, 0.3), 3);
+      const scaleFactor = newScale / scale;
+      
+      // Adjust pan to zoom toward cursor
+      // Formula: newPan = cursor - (cursor - oldPan) * scaleFactor
+      const newPanX = cursorX - (cursorX - pan.x) * scaleFactor;
+      const newPanY = cursorY - (cursorY - pan.y) * scaleFactor;
+      
+      setScale(newScale);
+      setPan({ x: newPanX, y: newPanY });
     };
     
     wrapper.addEventListener('wheel', handleWheel, { passive: false });
     return () => wrapper.removeEventListener('wheel', handleWheel);
-  }, []);
+  }, [scale, pan]);
 
   // Zoom controls
   const handleZoomIn = () => setScale((s) => Math.min(s * 1.2, 3));

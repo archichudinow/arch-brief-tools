@@ -6,12 +6,17 @@ import { ChatPanel } from '@/components/chat';
 import { AreaBoard } from '@/components/board';
 import { useProjectStore, useHistoryStore, useUIStore } from '@/stores';
 import { useEffect } from 'react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 function App() {
   const nodes = useProjectStore((s) => s.nodes);
   const groups = useProjectStore((s) => s.groups);
   const selectedNodeIds = useUIStore((s) => s.selectedNodeIds);
   const selectedGroupIds = useUIStore((s) => s.selectedGroupIds);
+  const leftPanelCollapsed = useUIStore((s) => s.leftPanelCollapsed);
+  const rightPanelCollapsed = useUIStore((s) => s.rightPanelCollapsed);
+  const toggleLeftPanel = useUIStore((s) => s.toggleLeftPanel);
+  const toggleRightPanel = useUIStore((s) => s.toggleRightPanel);
 
   // Initialize history with initial state
   useEffect(() => {
@@ -59,27 +64,57 @@ function App() {
     <div className="h-screen flex flex-col bg-background">
       <Header />
 
-      <main className="flex-1 flex overflow-hidden">
+      <main className="flex-1 flex overflow-hidden relative">
         {/* Left Panel - Inspector */}
-        <aside className="w-80 border-r border-border bg-card flex flex-col">
-          {selectedNodeIds.length > 0 ? (
-            <AreaInspector />
-          ) : selectedGroupIds.length > 0 ? (
-            <GroupInspector />
+        {!leftPanelCollapsed && (
+          <aside className="w-80 border-r border-border bg-card flex flex-col">
+            {selectedNodeIds.length > 0 ? (
+              <AreaInspector />
+            ) : selectedGroupIds.length > 0 ? (
+              <GroupInspector />
+            ) : (
+              <div className="h-full flex items-center justify-center text-muted-foreground text-sm p-4 text-center">
+                Select an area or group to inspect
+              </div>
+            )}
+          </aside>
+        )}
+
+        {/* Left Panel Toggle */}
+        <button
+          className={`absolute top-1/2 -translate-y-1/2 z-50 h-16 w-3 flex items-center justify-center rounded-r transition-opacity bg-muted/80 hover:bg-muted ${leftPanelCollapsed ? 'opacity-60 hover:opacity-100' : 'opacity-0 hover:opacity-100'}`}
+          style={{ left: leftPanelCollapsed ? 0 : 'calc(20rem - 1px)' }}
+          onClick={toggleLeftPanel}
+          title={leftPanelCollapsed ? 'Show inspector' : 'Hide inspector'}
+        >
+          {leftPanelCollapsed ? (
+            <ChevronRight className="h-3 w-3 text-muted-foreground" />
           ) : (
-            <div className="h-full flex items-center justify-center text-muted-foreground text-sm p-4 text-center">
-              Select an area or group to inspect
-            </div>
+            <ChevronLeft className="h-3 w-3 text-muted-foreground" />
           )}
-        </aside>
+        </button>
 
         {/* Center - Area Board */}
         <div className="flex-1 flex flex-col overflow-hidden">
           <AreaBoard />
         </div>
 
+        {/* Right Panel Toggle */}
+        <button
+          className={`absolute top-1/2 -translate-y-1/2 z-50 h-16 w-3 flex items-center justify-center rounded-l transition-opacity bg-muted/80 hover:bg-muted ${rightPanelCollapsed ? 'opacity-60 hover:opacity-100' : 'opacity-0 hover:opacity-100'}`}
+          style={{ right: rightPanelCollapsed ? 0 : 'calc(24rem - 1px)' }}
+          onClick={toggleRightPanel}
+          title={rightPanelCollapsed ? 'Show AI chat' : 'Hide AI chat'}
+        >
+          {rightPanelCollapsed ? (
+            <ChevronLeft className="h-3 w-3 text-muted-foreground" />
+          ) : (
+            <ChevronRight className="h-3 w-3 text-muted-foreground" />
+          )}
+        </button>
+
         {/* Right Panel - AI Chat */}
-        <ChatPanel />
+        {!rightPanelCollapsed && <ChatPanel />}
       </main>
 
       <Toaster position="bottom-right" />

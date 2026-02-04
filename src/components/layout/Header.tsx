@@ -1,29 +1,30 @@
-import { useProjectStore, useHistoryStore, useChatStore } from '@/stores';
+import { useProjectStore, useHistoryStore } from '@/stores';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
   DropdownMenuSeparator,
+  DropdownMenuLabel,
 } from '@/components/ui/dropdown-menu';
 import {
   Download,
   Upload,
-  Settings,
   MoreVertical,
   Undo2,
   Redo2,
   FilePlus,
-  Sparkles,
   Sun,
   Moon,
   Monitor,
   FileSpreadsheet,
   Box,
   ChevronDown,
+  FolderOpen,
+  LayoutGrid,
+  Layers,
 } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import { useRef, useState } from 'react';
@@ -45,14 +46,13 @@ export function Header() {
   const canRedo = useHistoryStore((s) => s.canRedo());
   const undo = useHistoryStore((s) => s.undo);
   const redo = useHistoryStore((s) => s.redo);
-  
-  const isOpen = useChatStore((s) => s.isOpen);
-  const toggleChat = useChatStore((s) => s.toggleChat);
-  const pendingProposals = useChatStore((s) => s.pendingProposals);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isEditingName, setIsEditingName] = useState(false);
-  const { theme, setTheme } = useTheme();
+  const { setTheme } = useTheme();
+  
+  // View state (future: could be in store)
+  const [activeView, setActiveView] = useState<'board' | 'levels'>('board');
 
   const handleExportJSON = () => {
     const json = exportProject();
@@ -137,23 +137,141 @@ export function Header() {
   };
 
   return (
-    <header className="h-14 border-b border-border bg-card flex items-center justify-between px-4">
-      {/* Left: Theme Toggle & Logo & Project Name */}
-      <div className="flex items-center gap-4">
-        {/* Theme Toggle */}
+    <header className="h-12 border-b border-border bg-card flex items-center justify-between px-3 gap-4">
+      {/* Left: Logo & Project Name */}
+      <div className="flex items-center gap-3 min-w-0">
+        <div className="w-7 h-7 rounded bg-primary flex items-center justify-center flex-shrink-0">
+          <span className="text-primary-foreground font-bold text-xs">AB</span>
+        </div>
+        {isEditingName ? (
+          <Input
+            value={projectName}
+            onChange={(e) => setProjectName(e.target.value)}
+            onBlur={() => setIsEditingName(false)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === 'Escape') {
+                setIsEditingName(false);
+              }
+            }}
+            className="w-40 h-7 text-sm"
+            autoFocus
+          />
+        ) : (
+          <button
+            onClick={() => setIsEditingName(true)}
+            className="text-sm font-medium hover:text-primary transition-colors truncate max-w-[160px]"
+            title={projectName}
+          >
+            {projectName}
+          </button>
+        )}
+        
+        {/* Undo/Redo - near project name */}
+        <div className="flex items-center border-l border-border pl-3 ml-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={handleUndo}
+            disabled={!canUndo}
+            title="Undo (Cmd+Z)"
+          >
+            <Undo2 className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={handleRedo}
+            disabled={!canRedo}
+            title="Redo (Cmd+Shift+Z)"
+          >
+            <Redo2 className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      </div>
+
+      {/* Center: View Switcher */}
+      <div className="flex items-center gap-1 bg-muted/50 rounded-md p-0.5">
+        <Button
+          variant={activeView === 'board' ? 'secondary' : 'ghost'}
+          size="sm"
+          className="h-7 px-3 text-xs"
+          onClick={() => setActiveView('board')}
+        >
+          <LayoutGrid className="h-3.5 w-3.5 mr-1.5" />
+          Board
+        </Button>
+        <Button
+          variant={activeView === 'levels' ? 'secondary' : 'ghost'}
+          size="sm"
+          className="h-7 px-3 text-xs"
+          onClick={() => {
+            setActiveView('levels');
+            toast.info('Levels view coming soon');
+          }}
+          title="Program stack per level (coming soon)"
+        >
+          <Layers className="h-3.5 w-3.5 mr-1.5" />
+          Levels
+        </Button>
+      </div>
+
+      {/* Right: Actions */}
+      <div className="flex items-center gap-1.5">
+        {/* File menu */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon">
-              {theme === 'dark' ? (
-                <Moon className="h-4 w-4" />
-              ) : theme === 'light' ? (
-                <Sun className="h-4 w-4" />
-              ) : (
-                <Monitor className="h-4 w-4" />
-              )}
+            <Button variant="outline" size="sm" className="h-7 px-2 text-xs">
+              <FolderOpen className="h-3.5 w-3.5 mr-1.5" />
+              File
+              <ChevronDown className="h-3 w-3 ml-1 opacity-50" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={handleNewProject}>
+              <FilePlus className="h-4 w-4 mr-2" />
+              New Project
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => fileInputRef.current?.click()}>
+              <Upload className="h-4 w-4 mr-2" />
+              Import JSON...
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel className="text-xs">Export</DropdownMenuLabel>
+            <DropdownMenuItem onClick={handleExportJSON}>
+              <Download className="h-4 w-4 mr-2" />
+              JSON
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={handleExportExcel}>
+              <FileSpreadsheet className="h-4 w-4 mr-2" />
+              Excel
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={handleExportGLB}>
+              <Box className="h-4 w-4 mr-2" />
+              GLB (3D)
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".json,.archbrief.json"
+          onChange={handleImport}
+          className="hidden"
+        />
+
+        {/* Settings/Theme */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" className="h-7 w-7">
+              <MoreVertical className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuLabel className="text-xs">Theme</DropdownMenuLabel>
             <DropdownMenuItem onClick={() => setTheme('light')}>
               <Sun className="h-4 w-4 mr-2" />
               Light
@@ -165,135 +283,6 @@ export function Header() {
             <DropdownMenuItem onClick={() => setTheme('system')}>
               <Monitor className="h-4 w-4 mr-2" />
               System
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded bg-primary flex items-center justify-center">
-            <span className="text-primary-foreground font-bold text-sm">AB</span>
-          </div>
-          {isEditingName ? (
-            <Input
-              value={projectName}
-              onChange={(e) => setProjectName(e.target.value)}
-              onBlur={() => setIsEditingName(false)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === 'Escape') {
-                  setIsEditingName(false);
-                }
-              }}
-              className="w-48 h-8"
-              autoFocus
-            />
-          ) : (
-            <button
-              onClick={() => setIsEditingName(true)}
-              className="text-sm font-medium hover:text-primary transition-colors"
-            >
-              {projectName}
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Center: Undo/Redo */}
-      <div className="flex items-center gap-1">
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={handleUndo}
-          disabled={!canUndo}
-          title="Undo (Cmd+Z)"
-        >
-          <Undo2 className="h-4 w-4" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={handleRedo}
-          disabled={!canRedo}
-          title="Redo (Cmd+Shift+Z)"
-        >
-          <Redo2 className="h-4 w-4" />
-        </Button>
-      </div>
-
-      {/* Right: Actions */}
-      <div className="flex items-center gap-2">
-        <Button
-          variant={isOpen ? 'default' : 'outline'}
-          size="sm"
-          onClick={toggleChat}
-          className="relative"
-        >
-          <Sparkles className="h-4 w-4 mr-2" />
-          AI Chat
-          {pendingProposals.length > 0 && (
-            <Badge
-              variant="secondary"
-              className="absolute -top-2 -right-2 h-5 w-5 p-0 flex items-center justify-center text-xs"
-            >
-              {pendingProposals.length}
-            </Badge>
-          )}
-        </Button>
-        
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm">
-              <Download className="h-4 w-4 mr-2" />
-              Export
-              <ChevronDown className="h-3 w-3 ml-1" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem onClick={handleExportJSON}>
-              <Download className="h-4 w-4 mr-2" />
-              Export JSON
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={handleExportExcel}>
-              <FileSpreadsheet className="h-4 w-4 mr-2" />
-              Export Excel
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={handleExportGLB}>
-              <Box className="h-4 w-4 mr-2" />
-              Export GLB (3D)
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".json,.archbrief.json"
-          onChange={handleImport}
-          className="hidden"
-        />
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => fileInputRef.current?.click()}
-        >
-          <Upload className="h-4 w-4 mr-2" />
-          Import
-        </Button>
-
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon">
-              <MoreVertical className="h-4 w-4" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem onClick={handleNewProject}>
-              <FilePlus className="h-4 w-4 mr-2" />
-              New Project
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem disabled>
-              <Settings className="h-4 w-4 mr-2" />
-              Settings
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
