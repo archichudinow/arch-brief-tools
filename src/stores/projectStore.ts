@@ -21,6 +21,21 @@ import { useHistoryStore } from './historyStore';
 // STATE INTERFACE
 // ============================================
 
+// Board layout types for persistence
+export interface BoardComment {
+  id: string;
+  x: number;
+  y: number;
+  text: string;
+}
+
+export interface BoardLayout {
+  groupPositions: Record<string, { x: number; y: number }>;
+  groupSizeOverrides: Record<string, { width?: number; height?: number }>;
+  areaOffsets: Record<string, { x: number; y: number }>;
+  comments: BoardComment[];
+}
+
 interface ProjectState {
   // Meta
   meta: ProjectMeta;
@@ -31,6 +46,9 @@ interface ProjectState {
   
   // Grouping Layer
   groups: Record<UUID, Group>;
+  
+  // Board Layout (positions, sizes, comments)
+  boardLayout: BoardLayout;
   
   // Actions - Meta
   setProjectName: (name: string) => void;
@@ -57,6 +75,18 @@ interface ProjectState {
   assignToGroup: (groupId: UUID, nodeIds: UUID[]) => void;
   removeFromGroup: (groupId: UUID, nodeIds: UUID[]) => void;
   
+  // Actions - Board Layout
+  setGroupPosition: (groupId: string, x: number, y: number) => void;
+  setGroupSizeOverride: (groupId: string, size: { width?: number; height?: number }) => void;
+  clearGroupSizeOverride: (groupId: string) => void;
+  setAreaOffset: (areaId: string, x: number, y: number) => void;
+  clearAreaOffset: (areaId: string) => void;
+  clearAreaOffsets: (areaIds: string[]) => void;
+  addComment: (x: number, y: number, text?: string) => string;
+  updateComment: (id: string, text: string) => void;
+  deleteComment: (id: string) => void;
+  moveComment: (id: string, x: number, y: number) => void;
+  
   // Derived Values
   getNodeDerived: (id: UUID) => AreaNodeDerived | null;
   getUngroupedNodes: () => AreaNode[];
@@ -76,7 +106,7 @@ function now(): string {
   return new Date().toISOString();
 }
 
-function createInitialState(): Pick<ProjectState, 'meta' | 'rawInputs' | 'nodes' | 'groups'> {
+function createInitialState(): Pick<ProjectState, 'meta' | 'rawInputs' | 'nodes' | 'groups' | 'boardLayout'> {
   return {
     meta: {
       id: uuidv4(),
@@ -91,6 +121,12 @@ function createInitialState(): Pick<ProjectState, 'meta' | 'rawInputs' | 'nodes'
     },
     nodes: {},
     groups: {},
+    boardLayout: {
+      groupPositions: {},
+      groupSizeOverrides: {},
+      areaOffsets: {},
+      comments: [],
+    },
   };
 }
 
@@ -654,6 +690,84 @@ export const useProjectStore = create<ProjectState>()(
     },
 
     // ==========================================
+    // BOARD LAYOUT ACTIONS
+    // ==========================================
+
+    setGroupPosition: (groupId, x, y) => {
+      set((state) => {
+        state.boardLayout.groupPositions[groupId] = { x, y };
+      });
+    },
+
+    setGroupSizeOverride: (groupId, size) => {
+      set((state) => {
+        state.boardLayout.groupSizeOverrides[groupId] = size;
+      });
+    },
+
+    clearGroupSizeOverride: (groupId) => {
+      set((state) => {
+        delete state.boardLayout.groupSizeOverrides[groupId];
+      });
+    },
+
+    setAreaOffset: (areaId, x, y) => {
+      set((state) => {
+        state.boardLayout.areaOffsets[areaId] = { x, y };
+      });
+    },
+
+    clearAreaOffset: (areaId) => {
+      set((state) => {
+        delete state.boardLayout.areaOffsets[areaId];
+      });
+    },
+
+    clearAreaOffsets: (areaIds) => {
+      set((state) => {
+        for (const id of areaIds) {
+          delete state.boardLayout.areaOffsets[id];
+        }
+      });
+    },
+
+    addComment: (x, y, text = '') => {
+      const id = uuidv4();
+      set((state) => {
+        state.boardLayout.comments.push({ id, x, y, text });
+      });
+      return id;
+    },
+
+    updateComment: (id, text) => {
+      set((state) => {
+        const comment = state.boardLayout.comments.find((c) => c.id === id);
+        if (comment) {
+          comment.text = text;
+        }
+      });
+    },
+
+    deleteComment: (id) => {
+      set((state) => {
+        const index = state.boardLayout.comments.findIndex((c) => c.id === id);
+        if (index >= 0) {
+          state.boardLayout.comments.splice(index, 1);
+        }
+      });
+    },
+
+    moveComment: (id, x, y) => {
+      set((state) => {
+        const comment = state.boardLayout.comments.find((c) => c.id === id);
+        if (comment) {
+          comment.x = x;
+          comment.y = y;
+        }
+      });
+    },
+
+    // ==========================================
     // DERIVED VALUES
     // ==========================================
 
@@ -687,7 +801,7 @@ export const useProjectStore = create<ProjectState>()(
     exportProject: () => {
       const state = get();
       const data = {
-        schema_version: '1.0.0',
+        schema_version: '1.1.0',
         meta: state.meta,
         rawInputs: state.rawInputs,
         areaLayer: {
@@ -696,6 +810,7 @@ export const useProjectStore = create<ProjectState>()(
         groupingLayer: {
           groups: state.groups,
         },
+        boardLayout: state.boardLayout,
       };
       return JSON.stringify(data, null, 2);
     },
@@ -714,6 +829,13 @@ export const useProjectStore = create<ProjectState>()(
           state.rawInputs = data.rawInputs || { briefText: null, uploadedFiles: [] };
           state.nodes = data.areaLayer.nodes || {};
           state.groups = data.groupingLayer?.groups || {};
+          // Import board layout if available (v1.1.0+)
+          state.boardLayout = data.boardLayout || {
+            groupPositions: {},
+            groupSizeOverrides: {},
+            areaOffsets: {},
+            comments: [],
+          };
         });
 
         const newState = get();
@@ -735,6 +857,7 @@ export const useProjectStore = create<ProjectState>()(
         state.rawInputs = initial.rawInputs;
         state.nodes = initial.nodes;
         state.groups = initial.groups;
+        state.boardLayout = initial.boardLayout;
       });
 
       useHistoryStore.getState().reset();

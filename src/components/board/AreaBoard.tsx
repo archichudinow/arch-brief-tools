@@ -2,7 +2,8 @@ import { useRef, useState, useCallback, useEffect } from 'react';
 import { useProjectStore, useUIStore } from '@/stores';
 import { useGridLayout, snapToGrid, findGroupAtPosition, GROUP_PADDING, GROUP_HEADER_HEIGHT, UNUSED_AREAS_GROUP_ID } from './useGridLayout';
 import { GroupContainer } from './GroupContainer';
-import { ZoomIn, ZoomOut, Maximize2, Move, Plus, FolderPlus } from 'lucide-react';
+import { BoardComment } from './BoardComment';
+import { ZoomIn, ZoomOut, Maximize2, Move, Plus, FolderPlus, MessageSquare } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { CreateAreaDialog } from '@/components/area-tools/CreateAreaDialog';
 import { CreateGroupDialog } from '@/components/group-tools/CreateGroupDialog';
@@ -16,10 +17,6 @@ export function AreaBoard() {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
-  // Store absolute positions for groups (not offsets from layout)
-  const [groupPositions, setGroupPositions] = useState<Record<string, { x: number; y: number }>>({});
-  const [groupSizeOverrides, setGroupSizeOverrides] = useState<Record<string, { width?: number; height?: number }>>({});
-  const [areaOffsets, setAreaOffsets] = useState<Record<string, { x: number; y: number }>>({});
   // Store initial offset when drag starts - for reverting on collision
   const [dragStartOffsets, setDragStartOffsets] = useState<Record<string, { x: number; y: number }>>({});
   const [scale, setScale] = useState(1);
@@ -30,15 +27,35 @@ export function AreaBoard() {
   const [showCreateAreaDialog, setShowCreateAreaDialog] = useState(false);
   const [showCreateGroupDialog, setShowCreateGroupDialog] = useState(false);
 
-  // Store data
+  // Store data - project store (persisted)
   const nodes = useProjectStore((s) => s.nodes);
   const groups = useProjectStore((s) => s.groups);
   const assignToGroup = useProjectStore((s) => s.assignToGroup);
   const removeFromGroup = useProjectStore((s) => s.removeFromGroup);
+  
+  // Board layout from project store (persisted on export)
+  const groupPositions = useProjectStore((s) => s.boardLayout.groupPositions);
+  const groupSizeOverrides = useProjectStore((s) => s.boardLayout.groupSizeOverrides);
+  const areaOffsets = useProjectStore((s) => s.boardLayout.areaOffsets);
+  const comments = useProjectStore((s) => s.boardLayout.comments);
+  const setGroupPosition = useProjectStore((s) => s.setGroupPosition);
+  const setGroupSizeOverride = useProjectStore((s) => s.setGroupSizeOverride);
+  const clearGroupSizeOverride = useProjectStore((s) => s.clearGroupSizeOverride);
+  const setAreaOffset = useProjectStore((s) => s.setAreaOffset);
+  const clearAreaOffset = useProjectStore((s) => s.clearAreaOffset);
+  const clearAreaOffsets = useProjectStore((s) => s.clearAreaOffsets);
+  const addComment = useProjectStore((s) => s.addComment);
+  const updateComment = useProjectStore((s) => s.updateComment);
+  const deleteComment = useProjectStore((s) => s.deleteComment);
+  const moveComment = useProjectStore((s) => s.moveComment);
+  
+  // UI store (not persisted)
   const selectedNodeIds = useUIStore((s) => s.selectedNodeIds);
   const selectedGroupIds = useUIStore((s) => s.selectedGroupIds);
   const selectNodes = useUIStore((s) => s.selectNodes);
   const selectGroups = useUIStore((s) => s.selectGroups);
+  const isAddingComment = useUIStore((s) => s.isAddingComment);
+  const setAddingComment = useUIStore((s) => s.setAddingComment);
 
   // Measure container
   useEffect(() => {
@@ -59,22 +76,18 @@ export function AreaBoard() {
   // Calculate layout with size overrides
   const layout = useGridLayout(nodes, groups, dimensions.width, dimensions.height, groupSizeOverrides);
 
-  // Initialize positions for new groups - store them so they become independent
+  // Initialize positions for new groups - only once per group
+  // Use a ref to track which groups have been initialized to avoid re-running
+  const initializedGroupsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
-    const newPositions: Record<string, { x: number; y: number }> = {};
-    let hasNew = false;
-    
     for (const group of layout.groups) {
-      if (!groupPositions[group.id]) {
-        newPositions[group.id] = { x: group.x, y: group.y };
-        hasNew = true;
+      // Only initialize if not already in store AND not already initialized this session
+      if (!groupPositions[group.id] && !initializedGroupsRef.current.has(group.id)) {
+        initializedGroupsRef.current.add(group.id);
+        setGroupPosition(group.id, group.x, group.y);
       }
     }
-    
-    if (hasNew) {
-      setGroupPositions((prev) => ({ ...prev, ...newPositions }));
-    }
-  }, [layout.groups, groupPositions]);
+  }, [layout.groups]); // Intentionally exclude groupPositions to avoid re-running on drag
 
   // Handle node selection
   const handleSelectNode = useCallback(
@@ -114,21 +127,17 @@ export function AreaBoard() {
   );
 
   // Handle group dragging - update absolute position
+  // Use a ref to always have access to latest positions without recreating callback
+  const groupPositionsRef = useRef(groupPositions);
+  groupPositionsRef.current = groupPositions;
+  
   const handleDragGroup = useCallback(
     (groupId: string, deltaX: number, deltaY: number, initialX?: number, initialY?: number) => {
-      setGroupPositions((prev) => {
-        // Use existing position, or initial layout position if first drag
-        const current = prev[groupId] || { x: initialX ?? 0, y: initialY ?? 0 };
-        return {
-          ...prev,
-          [groupId]: {
-            x: current.x + deltaX,
-            y: current.y + deltaY,
-          },
-        };
-      });
+      // Use ref to get latest position, or initial layout position if first drag
+      const current = groupPositionsRef.current[groupId] || { x: initialX ?? 0, y: initialY ?? 0 };
+      setGroupPosition(groupId, current.x + deltaX, current.y + deltaY);
     },
-    []
+    [setGroupPosition]
   );
 
   // Handle area drag start - store initial offset for potential revert
@@ -143,34 +152,27 @@ export function AreaBoard() {
   );
 
   // Handle area dragging within groups
+  // Use a ref to always have access to latest offsets without recreating callback
+  const areaOffsetsRef = useRef(areaOffsets);
+  areaOffsetsRef.current = areaOffsets;
+  
   const handleDragArea = useCallback(
     (areaId: string, deltaX: number, deltaY: number) => {
-      setAreaOffsets((prev) => {
-        const current = prev[areaId] || { x: 0, y: 0 };
-        return {
-          ...prev,
-          [areaId]: {
-            x: current.x + deltaX,
-            y: current.y + deltaY,
-          },
-        };
-      });
+      const current = areaOffsetsRef.current[areaId] || { x: 0, y: 0 };
+      setAreaOffset(areaId, current.x + deltaX, current.y + deltaY);
     },
-    []
+    [setAreaOffset]
   );
 
   // Handle group resize
   const handleResizeGroup = useCallback(
     (groupId: string, newWidth: number, newHeight: number) => {
-      setGroupSizeOverrides((prev) => ({
-        ...prev,
-        [groupId]: {
-          width: snapToGrid(Math.max(100, newWidth)),
-          height: snapToGrid(Math.max(60, newHeight)),
-        },
-      }));
+      setGroupSizeOverride(groupId, {
+        width: snapToGrid(Math.max(100, newWidth)),
+        height: snapToGrid(Math.max(60, newHeight)),
+      });
     },
-    []
+    [setGroupSizeOverride]
   );
 
   // Check if two rectangles overlap
@@ -226,11 +228,7 @@ export function AreaBoard() {
           removeFromGroup(normalizedCurrentGroupId, [areaId]);
           
           // Clear size override for source group so it shrinks to fit
-          setGroupSizeOverrides((prev) => {
-            const next = { ...prev };
-            delete next[normalizedCurrentGroupId];
-            return next;
-          });
+          clearGroupSizeOverride(normalizedCurrentGroupId);
         }
         
         // Add to new real group if dropped on one (not the unused group)
@@ -238,36 +236,21 @@ export function AreaBoard() {
           assignToGroup(normalizedTargetGroupId, [areaId]);
           
           // Clear size override for the target group so it auto-resizes to fit new content
-          setGroupSizeOverrides((prev) => {
-            const next = { ...prev };
-            delete next[normalizedTargetGroupId];
-            return next;
-          });
+          clearGroupSizeOverride(normalizedTargetGroupId);
         }
         
         // Clear size override for unused group if involved
         if (currentGroupId === UNUSED_AREAS_GROUP_ID || targetGroupId === UNUSED_AREAS_GROUP_ID) {
-          setGroupSizeOverrides((prev) => {
-            const next = { ...prev };
-            delete next[UNUSED_AREAS_GROUP_ID];
-            return next;
-          });
+          clearGroupSizeOverride(UNUSED_AREAS_GROUP_ID);
         }
         
         // Reset offsets: for the moved area, AND for all remaining areas in source group
         // This prevents overlapping when layout recalculates positions
-        setAreaOffsets((prev) => {
-          const next = { ...prev };
-          // Reset the moved area
-          next[areaId] = { x: 0, y: 0 };
-          // Reset all areas that were in the source group (they'll be re-laid out)
-          for (const childId of sourceGroupChildIds) {
-            if (childId !== areaId) {
-              next[childId] = { x: 0, y: 0 };
-            }
-          }
-          return next;
-        });
+        clearAreaOffset(areaId);
+        const siblingIds = sourceGroupChildIds.filter((id) => id !== areaId);
+        if (siblingIds.length > 0) {
+          clearAreaOffsets(siblingIds);
+        }
       } else if (currentGroupId) {
         // Same group - check for collisions before allowing the move
         const group = layout.groups.find((g) => g.id === currentGroupId);
@@ -277,83 +260,68 @@ export function AreaBoard() {
         const draggedRect = group.children.find((c) => c.id === areaId);
         if (!draggedRect) return;
         
-        setAreaOffsets((prev) => {
-          const current = prev[areaId] || { x: 0, y: 0 };
-          const snappedOffset = {
-            x: snapToGrid(current.x),
-            y: snapToGrid(current.y),
+        const current = areaOffsetsRef.current[areaId] || { x: 0, y: 0 };
+        const snappedOffset = {
+          x: snapToGrid(current.x),
+          y: snapToGrid(current.y),
+        };
+        
+        // Calculate the area's new position within the group
+        const newX = draggedRect.x + snappedOffset.x;
+        const newY = draggedRect.y + snappedOffset.y;
+        
+        // Check bounds - area must stay within group content area
+        const minX = GROUP_PADDING;
+        const minY = GROUP_HEADER_HEIGHT + GROUP_PADDING;
+        const maxX = group.width - GROUP_PADDING - draggedRect.width;
+        const maxY = group.height - GROUP_PADDING - draggedRect.height;
+        
+        if (newX < minX || newX > maxX || newY < minY || newY > maxY) {
+          // Out of bounds - revert to initial position
+          const initial = dragStartOffsets[areaId] || { x: 0, y: 0 };
+          setAreaOffset(areaId, initial.x, initial.y);
+          return;
+        }
+        
+        // Check collision with other areas in the group
+        const newRect = {
+          x: newX,
+          y: newY,
+          width: draggedRect.width,
+          height: draggedRect.height,
+        };
+        
+        for (const otherRect of group.children) {
+          if (otherRect.id === areaId) continue;
+          
+          const otherOffset = areaOffsetsRef.current[otherRect.id] || { x: 0, y: 0 };
+          const otherPos = {
+            x: otherRect.x + otherOffset.x,
+            y: otherRect.y + otherOffset.y,
+            width: otherRect.width,
+            height: otherRect.height,
           };
           
-          // Calculate the area's new position within the group
-          const newX = draggedRect.x + snappedOffset.x;
-          const newY = draggedRect.y + snappedOffset.y;
-          
-          // Check bounds - area must stay within group content area
-          const minX = GROUP_PADDING;
-          const minY = GROUP_HEADER_HEIGHT + GROUP_PADDING;
-          const maxX = group.width - GROUP_PADDING - draggedRect.width;
-          const maxY = group.height - GROUP_PADDING - draggedRect.height;
-          
-          if (newX < minX || newX > maxX || newY < minY || newY > maxY) {
-            // Out of bounds - revert to initial position
-            return {
-              ...prev,
-              [areaId]: dragStartOffsets[areaId] || { x: 0, y: 0 },
-            };
+          if (rectsOverlap(newRect, otherPos)) {
+            // Collision detected - revert to initial position
+            const initial = dragStartOffsets[areaId] || { x: 0, y: 0 };
+            setAreaOffset(areaId, initial.x, initial.y);
+            return;
           }
-          
-          // Check collision with other areas in the group
-          const newRect = {
-            x: newX,
-            y: newY,
-            width: draggedRect.width,
-            height: draggedRect.height,
-          };
-          
-          for (const otherRect of group.children) {
-            if (otherRect.id === areaId) continue;
-            
-            const otherOffset = prev[otherRect.id] || { x: 0, y: 0 };
-            const otherPos = {
-              x: otherRect.x + otherOffset.x,
-              y: otherRect.y + otherOffset.y,
-              width: otherRect.width,
-              height: otherRect.height,
-            };
-            
-            if (rectsOverlap(newRect, otherPos)) {
-              // Collision detected - revert to initial position
-              return {
-                ...prev,
-                [areaId]: dragStartOffsets[areaId] || { x: 0, y: 0 },
-              };
-            }
-          }
-          
-          // No collision and within bounds - keep the snapped position
-          return {
-            ...prev,
-            [areaId]: snappedOffset,
-          };
-        });
+        }
+        
+        // No collision and within bounds - keep the snapped position
+        setAreaOffset(areaId, snappedOffset.x, snappedOffset.y);
       } else {
         // Ungrouped area - just snap the offset (no collision detection needed)
-        setAreaOffsets((prev) => {
-          const current = prev[areaId] || { x: 0, y: 0 };
-          return {
-            ...prev,
-            [areaId]: { 
-              x: snapToGrid(current.x), 
-              y: snapToGrid(current.y) 
-            },
-          };
-        });
+        const current = areaOffsetsRef.current[areaId] || { x: 0, y: 0 };
+        setAreaOffset(areaId, snapToGrid(current.x), snapToGrid(current.y));
       }
     },
-    [layout.groups, groupPositions, pan, scale, assignToGroup, removeFromGroup, dragStartOffsets]
+    [layout.groups, groupPositions, pan, scale, assignToGroup, removeFromGroup, dragStartOffsets, setAreaOffset, clearAreaOffset, clearAreaOffsets, clearGroupSizeOverride]
   );
 
-  // Handle canvas mouse events - middle button for pan
+  // Handle canvas mouse events - middle button for pan, left button for comments
   const handleCanvasMouseDown = useCallback((e: React.MouseEvent) => {
     // Middle mouse button (button === 1) for panning - works anywhere
     if (e.button === 1) {
@@ -361,7 +329,24 @@ export function AreaBoard() {
       setIsPanning(true);
       setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
     }
-  }, [pan]);
+    // Left click while adding comment mode
+    else if (e.button === 0 && isAddingComment) {
+      const target = e.target as HTMLElement;
+      // Don't place comment on cards/groups
+      if (target.closest('[data-area-card]') || target.closest('[data-group-container]')) {
+        return;
+      }
+      e.preventDefault();
+      const wrapper = wrapperRef.current;
+      if (!wrapper) return;
+      const rect = wrapper.getBoundingClientRect();
+      // Convert to canvas coordinates
+      const canvasX = (e.clientX - rect.left - pan.x) / scale;
+      const canvasY = (e.clientY - rect.top - pan.y) / scale;
+      addComment(canvasX, canvasY, '');
+      setAddingComment(false);
+    }
+  }, [pan, scale, isAddingComment, addComment, setAddingComment]);
 
   const handleCanvasMouseMove = useCallback(
     (e: React.MouseEvent) => {
@@ -402,9 +387,7 @@ export function AreaBoard() {
   const handleResetView = () => {
     setScale(1);
     setPan({ x: 0, y: 0 });
-    setGroupPositions({});
-    setGroupSizeOverrides({});
-    setAreaOffsets({});
+    // Note: positions, sizes, and offsets are preserved (stored in project)
   };
 
   // Clear selection when clicking empty area
@@ -424,6 +407,14 @@ export function AreaBoard() {
         </Button>
         <Button variant="ghost" size="icon" onClick={() => setShowCreateGroupDialog(true)} title="Add group">
           <FolderPlus className="w-4 h-4" />
+        </Button>
+        <Button 
+          variant={isAddingComment ? 'default' : 'ghost'} 
+          size="icon" 
+          onClick={() => setAddingComment(!isAddingComment)} 
+          title={isAddingComment ? 'Cancel adding comment' : 'Add comment'}
+        >
+          <MessageSquare className="w-4 h-4" />
         </Button>
         <div className="w-px h-4 bg-border mx-1" />
         <Button variant="ghost" size="icon" onClick={handleZoomOut} title="Zoom out">
@@ -455,7 +446,7 @@ export function AreaBoard() {
       {/* Canvas */}
       <div
         ref={wrapperRef}
-        className={`absolute inset-4 rounded-lg ${isPanning ? 'cursor-grabbing' : 'cursor-default'}`}
+        className={`absolute inset-4 rounded-lg ${isPanning ? 'cursor-grabbing' : isAddingComment ? 'cursor-crosshair' : 'cursor-default'}`}
         onMouseDown={handleCanvasMouseDown}
         onMouseMove={handleCanvasMouseMove}
         onMouseUp={handleCanvasMouseUp}
@@ -506,6 +497,22 @@ export function AreaBoard() {
                 />
             );
           })}
+
+          {/* Board comments */}
+          {comments.map((comment) => (
+            <BoardComment
+              key={comment.id}
+              id={comment.id}
+              x={comment.x}
+              y={comment.y}
+              text={comment.text}
+              isEditing={comment.text === ''}
+              onUpdate={updateComment}
+              onDelete={deleteComment}
+              onDrag={moveComment}
+              scale={scale}
+            />
+          ))}
 
           {/* Empty state */}
           {Object.keys(nodes).length === 0 && (

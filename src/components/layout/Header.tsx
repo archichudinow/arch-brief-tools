@@ -21,10 +21,15 @@ import {
   Sun,
   Moon,
   Monitor,
+  FileSpreadsheet,
+  Box,
+  ChevronDown,
 } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import { useRef, useState } from 'react';
 import { toast } from 'sonner';
+import { exportToExcel } from '@/lib/exportExcel';
+import { exportToGLB } from '@/lib/exportGLB';
 
 export function Header() {
   const projectName = useProjectStore((s) => s.meta.name);
@@ -32,13 +37,14 @@ export function Header() {
   const exportProject = useProjectStore((s) => s.exportProject);
   const importProject = useProjectStore((s) => s.importProject);
   const resetProject = useProjectStore((s) => s.resetProject);
+  const nodes = useProjectStore((s) => s.nodes);
+  const groups = useProjectStore((s) => s.groups);
+  const boardLayout = useProjectStore((s) => s.boardLayout);
 
   const canUndo = useHistoryStore((s) => s.canUndo());
   const canRedo = useHistoryStore((s) => s.canRedo());
   const undo = useHistoryStore((s) => s.undo);
   const redo = useHistoryStore((s) => s.redo);
-
-  const nodes = useProjectStore((s) => s.nodes);
   
   const isOpen = useChatStore((s) => s.isOpen);
   const toggleChat = useChatStore((s) => s.toggleChat);
@@ -48,7 +54,7 @@ export function Header() {
   const [isEditingName, setIsEditingName] = useState(false);
   const { theme, setTheme } = useTheme();
 
-  const handleExport = () => {
+  const handleExportJSON = () => {
     const json = exportProject();
     const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -57,7 +63,27 @@ export function Header() {
     a.download = `${projectName.replace(/\s+/g, '_')}.archbrief.json`;
     a.click();
     URL.revokeObjectURL(url);
-    toast.success('Project exported');
+    toast.success('Project exported as JSON');
+  };
+
+  const handleExportExcel = async () => {
+    try {
+      await exportToExcel({ projectName, nodes, groups });
+      toast.success('Project exported as Excel');
+    } catch (error) {
+      console.error('Excel export error:', error);
+      toast.error('Failed to export Excel file');
+    }
+  };
+
+  const handleExportGLB = async () => {
+    try {
+      await exportToGLB({ projectName, nodes, groups, boardLayout });
+      toast.success('Project exported as GLB');
+    } catch (error) {
+      console.error('GLB export error:', error);
+      toast.error('Failed to export GLB file');
+    }
   };
 
   const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -213,10 +239,29 @@ export function Header() {
           )}
         </Button>
         
-        <Button variant="outline" size="sm" onClick={handleExport}>
-          <Download className="h-4 w-4 mr-2" />
-          Export
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm">
+              <Download className="h-4 w-4 mr-2" />
+              Export
+              <ChevronDown className="h-3 w-3 ml-1" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={handleExportJSON}>
+              <Download className="h-4 w-4 mr-2" />
+              Export JSON
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={handleExportExcel}>
+              <FileSpreadsheet className="h-4 w-4 mr-2" />
+              Export Excel
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={handleExportGLB}>
+              <Box className="h-4 w-4 mr-2" />
+              Export GLB (3D)
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
 
         <input
           ref={fileInputRef}

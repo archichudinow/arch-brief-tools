@@ -22,6 +22,9 @@ interface UIState {
   inspectorTab: InspectorTab;
   showAiChat: boolean;
   
+  // Board interaction mode
+  isAddingComment: boolean;
+  
   // Actions - Selection
   selectNodes: (ids: UUID[], append?: boolean) => void;
   selectGroups: (ids: UUID[], append?: boolean) => void;
@@ -36,6 +39,9 @@ interface UIState {
   setActivePanel: (panel: PanelType) => void;
   setInspectorTab: (tab: InspectorTab) => void;
   toggleAiChat: () => void;
+  
+  // Actions - Board interaction
+  setAddingComment: (adding: boolean) => void;
 }
 
 // ============================================
@@ -51,6 +57,7 @@ export const useUIStore = create<UIState>()(
     activePanel: 'inspector',
     inspectorTab: 'details',
     showAiChat: false,
+    isAddingComment: false,
 
     // Selection actions
     selectNodes: (ids, append = false) => {
@@ -137,6 +144,13 @@ export const useUIStore = create<UIState>()(
     toggleAiChat: () => {
       set((state) => {
         state.showAiChat = !state.showAiChat;
+      });
+    },
+
+    // Board interaction actions
+    setAddingComment: (adding) => {
+      set((state) => {
+        state.isAddingComment = adding;
       });
     },
   }))
