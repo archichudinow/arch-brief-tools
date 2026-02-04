@@ -44,7 +44,7 @@ export interface BoardLayout {
 // ============================================
 
 const MIN_SIZE = 48; // Minimum dimension for readability
-const SMALL_AREA_THRESHOLD = 30; // m² - below this use icon treatment
+const SMALL_AREA_THRESHOLD = 10; // m² - below this use icon treatment
 const PADDING = 8; // Padding between items
 const GROUP_PADDING = 12; // Extra padding inside groups
 const GROUP_HEADER_HEIGHT = 36; // Space for group name

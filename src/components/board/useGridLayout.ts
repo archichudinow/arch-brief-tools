@@ -45,7 +45,7 @@ export interface BoardLayout {
 export const GRID_SIZE = 16; // Snap grid size - all sizes/positions are multiples of this
 export const MIN_CARD_SIZE = 32; // Minimum card dimension (2x grid)
 export const SMALL_CARD_SIZE = 16; // Small card size (1x grid)
-export const SMALL_AREA_THRESHOLD = 30; // m² - below this use smaller treatment
+export const SMALL_AREA_THRESHOLD = 10; // m² - below this use smaller treatment
 export const GROUP_PADDING = 16; // Padding inside groups (1x grid)
 export const GROUP_HEADER_HEIGHT = 48; // Space for group name (3x grid)
 export const GROUP_SIZE_MULTIPLIER = 1.2; // Groups are 20% bigger than needed for some breathing room

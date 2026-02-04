@@ -200,10 +200,14 @@ export interface ParsedBrief {
   areas: ParsedBriefArea[];
   detectedGroups?: DetectedGroup[];
   hasGroupStructure?: boolean;
-  briefTotal?: number | null;
+  briefTotal?: number | null;         // Legacy - use netTotal/grossTotal
+  netTotal?: number | null;           // NVO/NLA - excludes circulation
+  grossTotal?: number | null;         // GFA/GIA - includes circulation
+  netToGrossFactor?: number | null;   // Client's stated factor (e.g., 1.45)
   parsedTotal?: number;
   groupTotals?: GroupTotal[];
   projectContext: string;
   suggestedAreas?: ParsedBriefArea[];
   ambiguities?: string[];
+  skipCirculationAddition?: boolean;  // True if factor already accounts for circulation
 }

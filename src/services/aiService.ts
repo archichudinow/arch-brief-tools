@@ -14,7 +14,6 @@ import type {
 import {
   validateAgentResponse,
   validateConsultationResponse,
-  validateParsedBrief,
   validateProposal,
   validateEnhancedPrompts,
   validateBriefExtraction,
@@ -30,6 +29,19 @@ import {
   PROMPT_ENHANCER_SYSTEM,
   type PromptConfig,
 } from './aiPrompts';
+import {
+  analyzeInput,
+  type InputClassification,
+} from './briefAnalyzer';
+import {
+  GENERATE_PROMPT,
+  EXTRACT_TOLERANT_PROMPT,
+  RECONCILIATION_PROMPT,
+  INVALID_INPUT_RESPONSE,
+  buildPrompt,
+  formatAreasForReconciliation,
+  GROUP_COLORS,
+} from './briefStrategies';
 
 // ============================================
 // TYPES
@@ -357,49 +369,6 @@ function parseAndValidateConsultationResponse(
   };
 }
 
-function parseAndValidateBriefResponse(
-  responseText: string
-): { success: true; data: ParsedBrief } | { success: false; error: AIError } {
-  let parsed: unknown;
-  
-  try {
-    parsed = JSON.parse(responseText);
-  } catch {
-    return {
-      success: false,
-      error: {
-        type: 'parse_error',
-        message: 'Invalid JSON response from AI',
-        rawResponse: responseText,
-      },
-    };
-  }
-  
-  const validation = validateParsedBrief(parsed);
-  
-  if (!validation.success) {
-    return {
-      success: false,
-      error: {
-        type: 'validation_error',
-        message: 'Brief parsing failed validation',
-        details: validation.error,
-        rawResponse: responseText,
-      },
-    };
-  }
-  
-  return {
-    success: true,
-    data: {
-      areas: validation.data!.areas,
-      projectContext: validation.data!.projectContext,
-      suggestedAreas: validation.data!.suggestedAreas,
-      ambiguities: validation.data!.ambiguities,
-    },
-  };
-}
-
 // ============================================
 // PROPOSAL HELPERS
 // ============================================
@@ -480,17 +449,6 @@ export async function sendChatMessage(
 // ============================================
 // TWO-PASS BRIEF PARSING
 // ============================================
-
-const GROUP_COLORS = [
-  '#3b82f6', // blue
-  '#22c55e', // green
-  '#f59e0b', // amber
-  '#ef4444', // red
-  '#8b5cf6', // purple
-  '#ec4899', // pink
-  '#06b6d4', // cyan
-  '#84cc16', // lime
-];
 
 async function extractBriefRows(briefText: string, apiKey: string): Promise<BriefExtractionResult> {
   const response = await fetch(OPENAI_API_URL, {
@@ -741,44 +699,72 @@ function buildParsedBrief(
     detectedGroups: detectedGroups.length > 0 ? detectedGroups : undefined,
     hasGroupStructure: detectedGroups.length > 0,
     briefTotal,
+    netTotal: extraction.netTotal || briefTotal,
+    grossTotal: extraction.grossTotal || null,
+    netToGrossFactor: extraction.netToGrossFactor || null,
     parsedTotal: parsedIndoorTotal,
     groupTotals: groupTotals.length > 0 ? groupTotals : undefined,
     projectContext: classification.projectContext || extraction.projectDescription || '',
-    suggestedAreas: [], // Two-pass doesn't suggest
+    suggestedAreas: [],
     ambiguities: ambiguities.length > 0 ? ambiguities : undefined,
+    skipCirculationAddition: (extraction.netToGrossFactor && extraction.netToGrossFactor > 1) || false,
   };
 }
 
-export async function parseBrief(briefText: string): Promise<ParsedBrief> {
+export async function parseBrief(briefText: string): Promise<ParsedBrief & { inputClassification?: InputClassification }> {
   const apiKey = getApiKey();
   
-  console.log('Starting two-pass brief parsing...');
+  // Step 1: Analyze input to determine strategy
+  const classification = analyzeInput(briefText);
+  console.log('Input analysis:', {
+    type: classification.type,
+    quality: classification.quality,
+    strategy: classification.strategy,
+    confidence: classification.confidence,
+  });
   
-  try {
-    // Pass 1: Extract all rows
-    const extraction = await extractBriefRows(briefText, apiKey);
-    console.log(`Pass 1 complete: ${extraction.rows.length} rows extracted`);
+  // Step 2: Handle based on strategy
+  switch (classification.strategy) {
+    case 'reject':
+      console.log('Input rejected - invalid content');
+      return {
+        ...INVALID_INPUT_RESPONSE,
+        inputClassification: classification,
+      };
     
-    // Pass 2: Classify rows
-    const classification = await classifyBriefRows(extraction, apiKey);
-    const spaceCount = classification.classified.filter(c => c.classification === 'space').length;
-    console.log(`Pass 2 complete: ${spaceCount} spaces identified`);
+    case 'generate':
+      console.log('Using GENERATE strategy for prompt input');
+      return {
+        ...(await parseWithGenerateStrategy(classification.cleanedText, apiKey)),
+        inputClassification: classification,
+      };
     
-    // Build final result
-    const result = buildParsedBrief(extraction, classification);
-    console.log(`Parsing complete: ${result.areas.length} areas, ${result.parsedTotal}m² total`);
+    case 'extract_tolerant':
+      console.log('Using EXTRACT_TOLERANT strategy for dirty brief');
+      return {
+        ...(await parseWithTolerantStrategy(classification.cleanedText, apiKey, classification)),
+        inputClassification: classification,
+      };
     
-    return result;
-  } catch (error) {
-    console.error('Two-pass parsing failed, falling back to single-pass:', error);
-    
-    // Fallback to single-pass
-    return parseBriefSinglePass(briefText, apiKey);
+    case 'extract_strict':
+    default:
+      console.log('Using EXTRACT_STRICT strategy for structured brief');
+      return {
+        ...(await parseWithStrictStrategy(classification.cleanedText, apiKey)),
+        inputClassification: classification,
+      };
   }
 }
 
-// Fallback single-pass parsing
-async function parseBriefSinglePass(briefText: string, apiKey: string): Promise<ParsedBrief> {
+// ============================================
+// STRATEGY: GENERATE (for prompts)
+// ============================================
+
+async function parseWithGenerateStrategy(promptText: string, apiKey: string): Promise<ParsedBrief> {
+  console.log('Starting generate mode parsing...');
+  
+  const prompt = buildPrompt(GENERATE_PROMPT, { userInput: promptText });
+  
   const response = await fetch(OPENAI_API_URL, {
     method: 'POST',
     headers: {
@@ -788,10 +774,10 @@ async function parseBriefSinglePass(briefText: string, apiKey: string): Promise<
     body: JSON.stringify({
       model: 'gpt-4o',
       messages: [
-        { role: 'user', content: BRIEF_PARSING_PROMPT + briefText },
+        { role: 'user', content: prompt },
       ],
       response_format: { type: 'json_object' },
-      temperature: 0.2,
+      temperature: 0.7, // Higher for creativity
     }),
   });
   
@@ -799,22 +785,362 @@ async function parseBriefSinglePass(briefText: string, apiKey: string): Promise<
     const error = await response.json().catch(() => ({}));
     throw {
       type: 'api_error',
-      message: error.error?.message || `API error: ${response.status}`,
+      message: error.error?.message || `Generate failed: ${response.status}`,
     } as AIError;
   }
   
   const data = await response.json();
   const content = data.choices?.[0]?.message?.content || '';
   
-  console.log('Single-pass brief parsing response:', content);
+  console.log('Generate response:', content);
   
-  const result = parseAndValidateBriefResponse(content);
-  
-  if (!result.success) {
-    throw result.error;
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    throw { type: 'parse_error', message: 'Invalid JSON in generate response' } as AIError;
   }
   
-  return result.data;
+  // Map to ParsedBrief format
+  const areas = (parsed.areas as Array<{ name: string; areaPerUnit: number; count: number; aiNote?: string }>) || [];
+  const detectedGroups = (parsed.detectedGroups as Array<{ name: string; color: string; areaNames: string[] }>) || [];
+  
+  const formattedAreas = areas.map(a => ({
+    name: a.name,
+    areaPerUnit: a.areaPerUnit,
+    count: a.count || 1,
+    aiNote: a.aiNote,
+  }));
+  
+  const parsedTotal = formattedAreas.reduce((sum, a) => sum + a.areaPerUnit * a.count, 0);
+  
+  return {
+    areas: formattedAreas,
+    detectedGroups: detectedGroups.length > 0 ? detectedGroups.map((g, i) => ({
+      name: g.name,
+      color: g.color || GROUP_COLORS[i % GROUP_COLORS.length],
+      areaNames: g.areaNames,
+    })) : undefined,
+    hasGroupStructure: detectedGroups.length > 0,
+    briefTotal: (parsed.targetArea as number) || null,
+    parsedTotal,
+    projectContext: (parsed.projectContext as string) || (parsed.interpretation as string) || '',
+    suggestedAreas: [],
+    ambiguities: [
+      ...(parsed.assumptions as string[] || []).map(a => `Assumption: ${a}`),
+      ...(parsed.suggestions as string[] || []).map(s => `Suggestion: ${s}`),
+    ],
+  };
+}
+
+// ============================================
+// STRATEGY: TOLERANT (for dirty briefs)
+// ============================================
+
+async function parseWithTolerantStrategy(
+  briefText: string, 
+  apiKey: string,
+  inputClassification: InputClassification
+): Promise<ParsedBrief> {
+  console.log('Starting tolerant extraction...');
+  
+  // Include warnings in the prompt context
+  const contextNote = inputClassification.warnings.length > 0
+    ? `\n\nNOTE: This brief has some quality issues:\n${inputClassification.warnings.map(w => `- ${w}`).join('\n')}\n`
+    : '';
+  
+  const prompt = buildPrompt(EXTRACT_TOLERANT_PROMPT, { userInput: briefText + contextNote });
+  
+  const response = await fetch(OPENAI_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: 'gpt-4o',
+      messages: [
+        { role: 'user', content: prompt },
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.3, // Medium for some inference
+    }),
+  });
+  
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw {
+      type: 'api_error',
+      message: error.error?.message || `Tolerant extraction failed: ${response.status}`,
+    } as AIError;
+  }
+  
+  const data = await response.json();
+  const content = data.choices?.[0]?.message?.content || '';
+  
+  console.log('Tolerant extraction response:', content);
+  
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    throw { type: 'parse_error', message: 'Invalid JSON in tolerant response' } as AIError;
+  }
+  
+  // Map to ParsedBrief format
+  const areas = (parsed.areas as Array<{
+    name: string;
+    areaPerUnit: number;
+    count: number;
+    confidence: number;
+    source?: string;
+    inferred?: boolean;
+    inferenceReason?: string;
+  }>) || [];
+  
+  const detectedGroups = (parsed.detectedGroups as Array<{ name: string; color: string; areaNames: string[] }>) || [];
+  const statedTotals = (parsed.statedTotals as Array<{ text: string; value: number }>) || [];
+  const ambiguities = (parsed.ambiguities as string[]) || [];
+  const lowConfidenceItems = (parsed.lowConfidenceItems as Array<{ name: string; reason: string }>) || [];
+  
+  const formattedAreas = areas.map(a => ({
+    name: a.name,
+    areaPerUnit: a.areaPerUnit,
+    count: a.count || 1,
+    briefNote: a.source,
+    aiNote: a.inferred ? `[Inferred] ${a.inferenceReason || 'Estimated from typology'}` : undefined,
+  }));
+  
+  const parsedTotal = formattedAreas.reduce((sum, a) => sum + a.areaPerUnit * a.count, 0);
+  const briefTotal = statedTotals.length > 0 ? statedTotals[0].value : null;
+  
+  // Add low confidence items to ambiguities
+  const allAmbiguities = [
+    ...ambiguities,
+    ...lowConfidenceItems.map(item => `Low confidence: ${item.name} - ${item.reason}`),
+    ...inputClassification.suggestions,
+  ];
+  
+  return {
+    areas: formattedAreas,
+    detectedGroups: detectedGroups.length > 0 ? detectedGroups.map((g, i) => ({
+      name: g.name,
+      color: g.color || GROUP_COLORS[i % GROUP_COLORS.length],
+      areaNames: g.areaNames,
+    })) : undefined,
+    hasGroupStructure: detectedGroups.length > 0,
+    briefTotal,
+    parsedTotal,
+    projectContext: (parsed.projectContext as string) || '',
+    suggestedAreas: [],
+    ambiguities: allAmbiguities.length > 0 ? allAmbiguities : undefined,
+  };
+}
+
+// ============================================
+// STRATEGY: STRICT (existing two-pass)
+// ============================================
+
+async function parseWithStrictStrategy(briefText: string, apiKey: string): Promise<ParsedBrief> {
+  console.log('Starting strict two-pass parsing...');
+  
+  try {
+    // Pass 1: Extract all rows
+    const extraction = await extractBriefRows(briefText, apiKey);
+    console.log(`Pass 1 complete: ${extraction.rows.length} rows extracted`);
+    
+    // Pass 2: Classify rows
+    const classificationResult = await classifyBriefRows(extraction, apiKey);
+    const spaceCount = classificationResult.classified.filter(c => c.classification === 'space').length;
+    console.log(`Pass 2 complete: ${spaceCount} spaces identified`);
+    
+    // Build result
+    const result = buildParsedBrief(extraction, classificationResult);
+    console.log(`Parsing complete: ${result.areas.length} areas, ${result.parsedTotal}m² total`);
+    
+    // Pass 3 (optional): Reconciliation if totals don't match
+    if (result.briefTotal && result.parsedTotal) {
+      const discrepancy = Math.abs(result.briefTotal - result.parsedTotal);
+      const tolerance = result.briefTotal * 0.05; // 5% tolerance
+      
+      if (discrepancy > tolerance) {
+        console.log(`Discrepancy detected: ${discrepancy}m². Attempting reconciliation...`);
+        const reconciled = await attemptReconciliation(result, apiKey);
+        if (reconciled) {
+          return reconciled;
+        }
+      }
+    }
+    
+    return result;
+  } catch (error) {
+    console.error('Strict parsing failed, falling back to tolerant:', error);
+    
+    // Fallback to tolerant parsing
+    const fallbackClassification = analyzeInput(briefText);
+    fallbackClassification.strategy = 'extract_tolerant';
+    return parseWithTolerantStrategy(briefText, apiKey, fallbackClassification);
+  }
+}
+
+// ============================================
+// RECONCILIATION PASS
+// ============================================
+
+async function attemptReconciliation(
+  result: ParsedBrief, 
+  apiKey: string
+): Promise<ParsedBrief | null> {
+  try {
+    const areasText = formatAreasForReconciliation(result.areas);
+    
+    // Use net/gross totals if available, fallback to briefTotal
+    const netTotal = result.netTotal || result.briefTotal || 0;
+    const grossTotal = result.grossTotal || 0;
+    const netToGrossFactor = result.netToGrossFactor || 0;
+    const parsedTotal = result.parsedTotal || 0;
+    
+    const netDiscrepancy = netTotal - parsedTotal;
+    const grossDiscrepancy = grossTotal - parsedTotal;
+    const netDirection = netDiscrepancy > 0 ? 'under (missing areas)' : 'over (possible duplicates)';
+    const grossDirection = grossDiscrepancy > 0 ? 'under (missing areas)' : 'over (possible duplicates)';
+    
+    const prompt = buildPrompt(RECONCILIATION_PROMPT, {
+      parsedAreas: areasText,
+      netTotal: netTotal,
+      grossTotal: grossTotal || 'Not stated',
+      netToGrossFactor: netToGrossFactor || 'Not stated',
+      parsedTotal: parsedTotal,
+      netDiscrepancy: Math.abs(netDiscrepancy),
+      netDirection,
+      grossDiscrepancy: Math.abs(grossDiscrepancy),
+      grossDirection,
+    });
+    
+    const response = await fetch(OPENAI_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o',
+        messages: [
+          { role: 'user', content: prompt },
+        ],
+        response_format: { type: 'json_object' },
+        temperature: 0.2,
+      }),
+    });
+    
+    if (!response.ok) {
+      console.error('Reconciliation request failed');
+      return null;
+    }
+    
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content || '';
+    
+    console.log('Reconciliation response:', content);
+    
+    const parsed = JSON.parse(content) as {
+      analysis: string;
+      sectionValidation?: Array<{ section: string; parsed: number; stated: number; match: boolean }>;
+      suggestions: Array<{
+        action: 'add' | 'remove' | 'modify';
+        name: string;
+        areaPerUnit: number;
+        count?: number;
+        reason: string;
+        confidence: number;
+      }>;
+      skipCirculationAddition?: boolean;
+      adjustedTotal: number;
+      remainingDiscrepancy: number;
+      note?: string;
+    };
+    
+    // Check if we should skip adding circulation
+    const shouldSkipCirculation = parsed.skipCirculationAddition || netToGrossFactor > 1;
+    
+    // Only apply high-confidence suggestions, but skip circulation if factor is stated
+    let highConfidenceSuggestions = parsed.suggestions.filter(s => s.confidence >= 0.7);
+    
+    if (shouldSkipCirculation) {
+      // Filter out any circulation additions
+      highConfidenceSuggestions = highConfidenceSuggestions.filter(
+        s => !(s.action === 'add' && s.name.toLowerCase().includes('circulation'))
+      );
+    }
+    
+    // Build section validation messages
+    const sectionMismatches: string[] = [];
+    if (parsed.sectionValidation) {
+      for (const sv of parsed.sectionValidation) {
+        if (!sv.match) {
+          sectionMismatches.push(`• ${sv.section}: parsed ${sv.parsed}m² vs stated ${sv.stated}m² (diff: ${Math.abs(sv.stated - sv.parsed)}m²)`);
+        }
+      }
+    }
+    
+    if (highConfidenceSuggestions.length === 0) {
+      // No confident suggestions (or only circulation which we skipped)
+      return {
+        ...result,
+        skipCirculationAddition: shouldSkipCirculation,
+        ambiguities: [
+          ...(result.ambiguities || []),
+          `Reconciliation: ${parsed.analysis}`,
+          ...(shouldSkipCirculation && netToGrossFactor > 1 
+            ? [`✓ Net-to-Gross factor ${netToGrossFactor} accounts for ${Math.round((netToGrossFactor - 1) * 100)}% circulation`]
+            : []),
+          ...sectionMismatches,
+          ...(parsed.note ? [`Note: ${parsed.note}`] : []),
+        ],
+      };
+    }
+    
+    // Apply suggestions
+    const newAreas = [...result.areas];
+    const appliedChanges: string[] = [];
+    
+    for (const suggestion of highConfidenceSuggestions) {
+      if (suggestion.action === 'add') {
+        newAreas.push({
+          name: suggestion.name,
+          areaPerUnit: suggestion.areaPerUnit,
+          count: suggestion.count || 1,
+          aiNote: `[Auto-added] ${suggestion.reason}`,
+        });
+        appliedChanges.push(`Added: ${suggestion.name} (${suggestion.areaPerUnit}m²) - ${suggestion.reason}`);
+      }
+      // Could also handle 'remove' and 'modify' actions
+    }
+    
+    const newTotal = newAreas.reduce((sum, a) => sum + a.areaPerUnit * a.count, 0);
+    
+    return {
+      ...result,
+      areas: newAreas,
+      parsedTotal: newTotal,
+      skipCirculationAddition: shouldSkipCirculation,
+      suggestedAreas: [],
+      ambiguities: [
+        ...(result.ambiguities || []),
+        ...appliedChanges,
+        ...(shouldSkipCirculation && netToGrossFactor > 1 
+          ? [`✓ Net-to-Gross factor ${netToGrossFactor} accounts for ${Math.round((netToGrossFactor - 1) * 100)}% circulation`]
+          : []),
+        ...sectionMismatches,
+        ...(parsed.remainingDiscrepancy > 0 ? [`Remaining discrepancy: ${parsed.remainingDiscrepancy}m²`] : []),
+        ...(parsed.note ? [`Note: ${parsed.note}`] : []),
+      ],
+    };
+    
+  } catch (error) {
+    console.error('Reconciliation failed:', error);
+    return null;
+  }
 }
 
 // ============================================

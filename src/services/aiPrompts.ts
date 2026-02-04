@@ -137,26 +137,43 @@ DO NOT interpret or classify. Just extract literally.
 For EACH row that has a name and area value, extract:
 - text: The exact text/name as written
 - value: The area value in m² (number only)
-- multiplier: If format is "N × Xm²", extract N (otherwise 1)
+- multiplier: If format is "N × Xm²" or "N units × Xm²", extract N (otherwise 1)
 - section: What section/header this appears under (if any)
 - lineType: Your best guess - "item" | "subtotal" | "total" | "header"
+- areaType: "net" | "gross" | "unknown" (look for NVO, NLA, Net, GFA, GIA, Gross)
+
+IMPORTANT - Recognize these patterns:
+1. ITEMS: "Living / Bedroom: 80 × 30 m² = 2,400 m²" → value: 30, multiplier: 80
+2. SUBTOTALS: "Subtotal – Client Facilities: 3,128 m²" → lineType: "subtotal"
+3. NET TOTALS: "Total Net Floor Area (NVO): 4,257 m²" → lineType: "total", areaType: "net"
+4. GROSS TOTALS: "Total Gross Floor Area: 6,173 m²" → lineType: "total", areaType: "gross"
+5. NET-TO-GROSS FACTOR: "Net-to-Gross Factor: 1.45" → lineType: "factor", value: 1.45
 
 Clues for lineType:
 - "item": Individual room/space with specific function
 - "subtotal": Sum of items in a section (often at end of section, may say "subtotal")
-- "total": Program-wide total (often says "Total", "GFA", "Gross")
+- "total": Program-wide total (often says "Total", "GFA", "Gross", "NVO", "Net")
+- "factor": Net-to-gross conversion factor
 - "header": Section name without area, or area summary category
+
+Clues for areaType:
+- "net" / "NVO" / "NLA" / "Net Floor Area": Excludes circulation, walls
+- "gross" / "GFA" / "GIA" / "Gross Floor Area": Includes circulation, walls
+- If unclear: "unknown"
 
 OUTPUT FORMAT (JSON only):
 {
   "rows": [
-    { "text": "Classroom", "value": 120, "multiplier": 6, "section": "Learning Cluster", "parentSection": "Learning, Research & Innovation", "lineType": "item", "isOutdoor": false },
-    { "text": "Outdoor Learning Areas", "value": 700, "multiplier": 1, "section": "Learning, Research & Innovation", "parentSection": null, "lineType": "item", "isOutdoor": true },
-    { "text": "Learning Cluster", "value": 3120, "multiplier": 1, "section": "Learning, Research & Innovation", "parentSection": null, "lineType": "subtotal", "isOutdoor": false },
-    { "text": "Indoor Built-Up Area", "value": 14500, "multiplier": 1, "section": null, "parentSection": null, "lineType": "total", "isOutdoor": false }
+    { "text": "Classroom", "value": 120, "multiplier": 6, "section": "Learning Cluster", "parentSection": "Learning, Research & Innovation", "lineType": "item", "isOutdoor": false, "areaType": "unknown" },
+    { "text": "Total Net Floor Area (NVO)", "value": 4257, "multiplier": 1, "section": null, "parentSection": null, "lineType": "total", "isOutdoor": false, "areaType": "net" },
+    { "text": "Net-to-Gross Factor", "value": 1.45, "multiplier": 1, "section": null, "parentSection": null, "lineType": "factor", "isOutdoor": false, "areaType": "unknown" },
+    { "text": "Total Gross Floor Area", "value": 6173, "multiplier": 1, "section": null, "parentSection": null, "lineType": "total", "isOutdoor": false, "areaType": "gross" }
   ],
   "indoorTotal": 14500,
   "outdoorTotal": 9800,
+  "netTotal": 4257,
+  "grossTotal": 6173,
+  "netToGrossFactor": 1.45,
   "projectDescription": ""
 }
 

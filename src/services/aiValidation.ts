@@ -116,17 +116,21 @@ const ConsultationResponseSchema = z.object({
 const ExtractedRowSchema = z.object({
   text: z.string(),
   value: z.number().nonnegative(),
-  multiplier: z.number().int().positive().default(1),
+  multiplier: z.number().positive().default(1),  // Can be decimal for factors
   section: z.string().nullable().optional(),
   parentSection: z.string().nullable().optional(),
-  lineType: z.enum(['item', 'subtotal', 'total', 'header']),
+  lineType: z.enum(['item', 'subtotal', 'total', 'header', 'factor']),
   isOutdoor: z.boolean().default(false),
+  areaType: z.enum(['net', 'gross', 'unknown']).default('unknown'),
 });
 
 const BriefExtractionResultSchema = z.object({
   rows: z.array(ExtractedRowSchema),
   indoorTotal: z.number().nonnegative().nullable().optional(),
   outdoorTotal: z.number().nonnegative().nullable().optional(),
+  netTotal: z.number().nonnegative().nullable().optional(),
+  grossTotal: z.number().nonnegative().nullable().optional(),
+  netToGrossFactor: z.number().positive().nullable().optional(),
   projectDescription: z.string().optional(),
 });
 

@@ -1,11 +1,20 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { useChatStore, useProjectStore, useHistoryStore } from '@/stores';
-import { parseBrief, sendChatMessage, buildChatRequest, addIdsToProposals } from '@/services';
+import { 
+  parseBrief, 
+  sendChatMessage, 
+  buildChatRequest, 
+  addIdsToProposals,
+  analyzeInput,
+  getInputTypeDescription,
+  getStrategyDescription,
+  type InputClassification,
+} from '@/services';
 import type { ParsedBrief, ParsedBriefArea } from '@/types';
 import { 
   FileText, 
@@ -19,10 +28,34 @@ import {
   Layers,
   Calculator,
   CheckCircle2,
-  XCircle
+  XCircle,
+  Wand2,
+  FileQuestion,
+  Table,
+  Ban,
+  Info
 } from 'lucide-react';
 
 type ParseState = 'input' | 'parsing' | 'preview' | 'error' | 'organizing';
+
+// Helper to get icon for input type
+function getInputTypeIcon(type: InputClassification['type']) {
+  switch (type) {
+    case 'prompt': return Wand2;
+    case 'dirty': return FileQuestion;
+    case 'structured': return Table;
+    case 'garbage': return Ban;
+  }
+}
+
+// Helper to get color for quality level
+function getQualityColor(quality: InputClassification['quality']) {
+  switch (quality) {
+    case 'high': return 'text-green-600 bg-green-50';
+    case 'medium': return 'text-yellow-600 bg-yellow-50';
+    case 'low': return 'text-red-600 bg-red-50';
+  }
+}
 
 export function BriefInput() {
   const briefText = useChatStore((s) => s.briefText);
@@ -46,6 +79,12 @@ export function BriefInput() {
   const [autoOrganize, setAutoOrganize] = useState(false);
   
   const addAIMessage = useChatStore((s) => s.addAIMessage);
+  
+  // Analyze input in real-time for preview
+  const inputClassification = useMemo(() => {
+    if (!briefText.trim()) return null;
+    return analyzeInput(briefText);
+  }, [briefText]);
   
   const handleParse = async () => {
     if (!briefText.trim()) return;
@@ -490,17 +529,100 @@ Example:
         />
       </div>
       
+      {/* Input Classification Preview */}
+      {inputClassification && briefText.trim().length > 10 && (
+        <div className="mt-3 p-3 rounded-lg border border-border bg-muted/30 flex-shrink-0 space-y-2">
+          {/* Type and Strategy */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {(() => {
+              const TypeIcon = getInputTypeIcon(inputClassification.type);
+              return (
+                <>
+                  <TypeIcon className="w-4 h-4 text-primary" />
+                  <span className="text-sm font-medium">
+                    {getInputTypeDescription(inputClassification.type)}
+                  </span>
+                  <Badge 
+                    variant="outline" 
+                    className={`text-xs ${getQualityColor(inputClassification.quality)}`}
+                  >
+                    {inputClassification.quality} quality
+                  </Badge>
+                </>
+              );
+            })()}
+          </div>
+          
+          {/* Strategy description */}
+          <p className="text-xs text-muted-foreground">
+            {getStrategyDescription(inputClassification.strategy)}
+          </p>
+          
+          {/* Warnings */}
+          {inputClassification.warnings.length > 0 && (
+            <div className="space-y-1">
+              {inputClassification.warnings.map((warning, i) => (
+                <div key={i} className="flex items-start gap-2 text-xs text-amber-600">
+                  <AlertTriangle className="w-3 h-3 mt-0.5 flex-shrink-0" />
+                  <span>{warning}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          
+          {/* Suggestions for low quality */}
+          {inputClassification.quality === 'low' && inputClassification.suggestions.length > 0 && (
+            <div className="space-y-1 pt-1 border-t border-border">
+              {inputClassification.suggestions.slice(0, 2).map((suggestion, i) => (
+                <div key={i} className="flex items-start gap-2 text-xs text-blue-600">
+                  <Info className="w-3 h-3 mt-0.5 flex-shrink-0" />
+                  <span>{suggestion}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          
+          {/* Stats for structured briefs */}
+          {inputClassification.type === 'structured' && (
+            <div className="flex gap-3 text-xs text-muted-foreground pt-1 border-t border-border">
+              <span>Lines: {inputClassification.signals.lineCount}</span>
+              <span>Numbers: {inputClassification.signals.numericCount}</span>
+              {inputClassification.signals.hasTotals && (
+                <span className="text-green-600">✓ Has totals</span>
+              )}
+              {inputClassification.signals.hasSectionHeaders && (
+                <span className="text-green-600">✓ Has headers</span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+      
       {error && (
         <p className="text-xs text-destructive mt-2 flex-shrink-0">{error}</p>
       )}
       
       <Button 
         onClick={handleParse} 
-        disabled={!briefText.trim()}
+        disabled={!briefText.trim() || inputClassification?.strategy === 'reject'}
         className="mt-4"
       >
-        <Sparkles className="w-4 h-4 mr-1" />
-        Parse Brief
+        {inputClassification?.strategy === 'generate' ? (
+          <>
+            <Wand2 className="w-4 h-4 mr-1" />
+            Generate Program
+          </>
+        ) : inputClassification?.strategy === 'reject' ? (
+          <>
+            <Ban className="w-4 h-4 mr-1" />
+            Cannot Parse
+          </>
+        ) : (
+          <>
+            <Sparkles className="w-4 h-4 mr-1" />
+            Parse Brief
+          </>
+        )}
       </Button>
     </div>
   );

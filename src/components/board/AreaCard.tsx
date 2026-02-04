@@ -119,8 +119,11 @@ export function AreaCard({
   
   // Only show labels for areas >= 10 sqm
   const showLabels = area >= 10;
-  // Show name label for areas >= 30 sqm
-  const showNameLabel = area >= 30;
+  // Show full name for areas >= 10 sqm, abbreviation for smaller
+  const showNameLabel = area >= 10;
+  const showAbbreviation = area < 10;
+  // Get first 2 letters for small areas
+  const abbreviation = name.slice(0, 2).toUpperCase();
 
   // Simple color-filled card
   return (
@@ -156,6 +159,17 @@ export function AreaCard({
         >
           <div className="text-[6px] font-medium leading-tight opacity-80">
             {name}
+          </div>
+        </div>
+      )}
+      {/* Abbreviation for small areas (<10 sqm) - centered */}
+      {showAbbreviation && (
+        <div 
+          className="absolute inset-0 flex items-center justify-center select-none pointer-events-none"
+          style={{ color: borderColor }}
+        >
+          <div className="text-[6px] font-bold leading-tight opacity-80">
+            {abbreviation}
           </div>
         </div>
       )}
