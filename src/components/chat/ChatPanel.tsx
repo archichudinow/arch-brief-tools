@@ -9,7 +9,6 @@ import { sendChatMessage, buildChatRequest, addIdsToProposals } from '@/services
 import { MessageBubble } from './MessageBubble';
 import { BriefInput } from './BriefInput';
 import { 
-  X, 
   Send, 
   Loader2, 
   Trash2, 
@@ -19,8 +18,6 @@ import {
 } from 'lucide-react';
 
 export function ChatPanel() {
-  const isOpen = useChatStore((s) => s.isOpen);
-  const closeChat = useChatStore((s) => s.closeChat);
   const messages = useChatStore((s) => s.messages);
   const inputValue = useChatStore((s) => s.inputValue);
   const setInputValue = useChatStore((s) => s.setInputValue);
@@ -51,12 +48,12 @@ export function ChatPanel() {
     }
   }, [messages]);
   
-  // Focus input when panel opens
+  // Focus input when not in brief mode
   useEffect(() => {
-    if (isOpen && inputRef.current && !briefMode) {
+    if (inputRef.current && !briefMode) {
       inputRef.current.focus();
     }
-  }, [isOpen, briefMode]);
+  }, [briefMode]);
   
   const handleSend = async () => {
     if (!inputValue.trim() || isLoading) return;
@@ -72,13 +69,14 @@ export function ChatPanel() {
     setLoading(true);
     
     try {
-      // Build request
+      // Build request - if nothing selected, all areas are included
       const request = buildChatRequest(
         content,
         projectContext,
         selectedNodes,
         selectedGroups,
-        nodes
+        nodes,
+        groups
       );
       
       // Send to AI - returns already-parsed AIResponse
@@ -118,10 +116,8 @@ export function ChatPanel() {
     }
   };
   
-  if (!isOpen) return null;
-  
   return (
-    <div className="w-96 border-l border-border bg-card flex flex-col h-full">
+    <aside className="w-96 border-l border-border bg-card flex flex-col h-full">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border">
         <div className="flex items-center gap-2">
@@ -146,9 +142,6 @@ export function ChatPanel() {
           <Button variant="ghost" size="icon" onClick={clearChat} title="Clear chat">
             <Trash2 className="w-4 h-4" />
           </Button>
-          <Button variant="ghost" size="icon" onClick={closeChat}>
-            <X className="w-4 h-4" />
-          </Button>
         </div>
       </div>
       
@@ -157,28 +150,38 @@ export function ChatPanel() {
       ) : (
         <>
           {/* Context bar */}
-          {(selectedNodeIds.length > 0 || selectedGroupIds.length > 0) && (
-            <div className="px-4 py-2 bg-muted/50 text-xs border-b border-border">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-muted-foreground">Context:</span>
-                {selectedNodeIds.length > 0 && (
-                  <Badge variant="outline" className="text-xs">
-                    {selectedNodeIds.length} area{selectedNodeIds.length > 1 ? 's' : ''}
-                  </Badge>
-                )}
-                {selectedGroupIds.length > 0 && (
-                  <Badge variant="outline" className="text-xs">
-                    {selectedGroupIds.length} group{selectedGroupIds.length > 1 ? 's' : ''}
-                  </Badge>
-                )}
-              </div>
-              {selectedNodeIds.length > 0 && selectedNodeIds.length <= 5 && (
-                <div className="mt-1 text-muted-foreground truncate">
-                  {selectedNodeIds.map((id) => nodes[id]?.name).filter(Boolean).join(', ')}
+          <div className="px-4 py-2 bg-muted/50 text-xs border-b border-border">
+            {(selectedNodeIds.length > 0 || selectedGroupIds.length > 0) ? (
+              <>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-muted-foreground">Context:</span>
+                  {selectedNodeIds.length > 0 && (
+                    <Badge variant="outline" className="text-xs">
+                      {selectedNodeIds.length} area{selectedNodeIds.length > 1 ? 's' : ''}
+                    </Badge>
+                  )}
+                  {selectedGroupIds.length > 0 && (
+                    <Badge variant="outline" className="text-xs">
+                      {selectedGroupIds.length} group{selectedGroupIds.length > 1 ? 's' : ''}
+                    </Badge>
+                  )}
                 </div>
-              )}
-            </div>
-          )}
+                {selectedNodeIds.length > 0 && selectedNodeIds.length <= 5 && (
+                  <div className="mt-1 text-muted-foreground truncate">
+                    {selectedNodeIds.map((id) => nodes[id]?.name).filter(Boolean).join(', ')}
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <span>Context:</span>
+                <Badge variant="secondary" className="text-xs">
+                  All {Object.keys(nodes).length} areas
+                </Badge>
+                <span className="text-xs italic">(select specific areas to narrow context)</span>
+              </div>
+            )}
+          </div>
           
           {/* Messages */}
           <ScrollArea className="flex-1 min-h-0" ref={scrollRef}>
@@ -248,6 +251,6 @@ export function ChatPanel() {
           </div>
         </>
       )}
-    </div>
+    </aside>
   );
 }

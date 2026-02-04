@@ -13,6 +13,11 @@ export interface Group {
   // Notes
   aiNote: string | null;
   userNote: string | null;
+  // Board position (for 2D canvas)
+  boardPosition?: {
+    x: number;
+    y: number;
+  };
   // Metadata
   createdAt: Timestamp;
   modifiedAt: Timestamp;

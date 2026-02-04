@@ -213,7 +213,8 @@ export function buildChatRequest(
   projectContext: string | null,
   selectedNodes: AreaNode[],
   selectedGroups: Group[],
-  allNodes: Record<UUID, AreaNode>
+  allNodes: Record<UUID, AreaNode>,
+  allGroups: Record<UUID, Group>
 ): ChatRequest {
   const messages: ChatRequestMessage[] = [
     { role: 'system', content: BASE_SYSTEM_PROMPT },
@@ -226,17 +227,23 @@ export function buildChatRequest(
     });
   }
   
+  // If nothing selected, include ALL areas and groups in context
+  const hasSelection = selectedNodes.length > 0 || selectedGroups.length > 0;
+  const nodesToInclude = hasSelection ? selectedNodes : Object.values(allNodes);
+  const groupsToInclude = hasSelection ? selectedGroups : Object.values(allGroups);
+  
   const selectionContext = [
-    formatNodeContext(selectedNodes),
-    formatGroupContext(selectedGroups, allNodes),
+    formatNodeContext(nodesToInclude),
+    formatGroupContext(groupsToInclude, allNodes),
   ]
     .filter(Boolean)
     .join('\n');
   
   if (selectionContext) {
+    const label = hasSelection ? 'Current Selection' : 'All Project Areas';
     messages.push({
       role: 'system',
-      content: `Current Selection:\n${selectionContext}`,
+      content: `${label}:\n${selectionContext}`,
     });
   }
   

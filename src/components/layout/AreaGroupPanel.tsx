@@ -159,7 +159,7 @@ export function AreaGroupPanel() {
     <DragDropContext onDragEnd={handleDragEnd}>
       <div className="h-full flex">
         {/* Areas Column */}
-        <div className="w-1/2 border-r border-border flex flex-col">
+        <div className="w-1/2 border-r border-border flex flex-col min-h-0">
           <div className="p-3 border-b border-border flex items-center justify-between">
             <div>
               <h2 className="text-sm font-semibold">Areas</h2>
@@ -175,7 +175,7 @@ export function AreaGroupPanel() {
 
           <Droppable droppableId="unassigned">
             {(provided, snapshot) => (
-              <ScrollArea className="flex-1">
+              <ScrollArea className="flex-1 min-h-0">
                 <div
                   ref={provided.innerRef}
                   {...provided.droppableProps}
@@ -208,7 +208,19 @@ export function AreaGroupPanel() {
                                 : 'bg-card border-transparent hover:border-border'
                               }
                             `}
-                            onClick={() => selectNodes([node.id])}
+                            onClick={(e) => {
+                              const isSelected = selectedNodeIds.includes(node.id);
+                              if (e.ctrlKey || e.metaKey) {
+                                // Multi-select toggle
+                                selectNodes([node.id], true);
+                              } else if (isSelected && selectedNodeIds.length === 1) {
+                                // Clicking only selected item - unselect
+                                selectNodes([]);
+                              } else {
+                                // Single select
+                                selectNodes([node.id]);
+                              }
+                            }}
                           >
                             <GripVertical className="h-4 w-4 text-muted-foreground shrink-0" />
                             <div className="flex-1 min-w-0">
@@ -241,7 +253,7 @@ export function AreaGroupPanel() {
         </div>
 
         {/* Groups Column */}
-        <div className="w-1/2 flex flex-col">
+        <div className="w-1/2 flex flex-col min-h-0">
           <div className="p-3 border-b border-border flex items-center justify-between">
             <div>
               <h2 className="text-sm font-semibold">Groups</h2>
@@ -255,7 +267,7 @@ export function AreaGroupPanel() {
             </Button>
           </div>
 
-          <ScrollArea className="flex-1">
+          <ScrollArea className="flex-1 min-h-0">
             <div className="p-2 space-y-2">
               {groupList.length === 0 ? (
                 <div className="p-4 text-center text-muted-foreground text-sm">
@@ -291,7 +303,16 @@ export function AreaGroupPanel() {
                           <Collapsible open={isExpanded} onOpenChange={() => toggleGroupExpanded(group.id)}>
                             <div
                               className="p-2 cursor-pointer"
-                              onClick={() => selectGroups([group.id])}
+                              onClick={(e) => {
+                                const isGroupSelected = selectedGroupIds.includes(group.id);
+                                if (e.ctrlKey || e.metaKey) {
+                                  selectGroups([group.id], true);
+                                } else if (isGroupSelected && selectedGroupIds.length === 1) {
+                                  selectGroups([]);
+                                } else {
+                                  selectGroups([group.id]);
+                                }
+                              }}
                             >
                               <div className="flex items-center gap-2">
                                 <CollapsibleTrigger

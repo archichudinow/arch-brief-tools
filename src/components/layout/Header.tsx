@@ -18,7 +18,11 @@ import {
   Redo2,
   FilePlus,
   Sparkles,
+  Sun,
+  Moon,
+  Monitor,
 } from 'lucide-react';
+import { useTheme } from 'next-themes';
 import { useRef, useState } from 'react';
 import { toast } from 'sonner';
 
@@ -42,6 +46,7 @@ export function Header() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isEditingName, setIsEditingName] = useState(false);
+  const { theme, setTheme } = useTheme();
 
   const handleExport = () => {
     const json = exportProject();
@@ -107,8 +112,37 @@ export function Header() {
 
   return (
     <header className="h-14 border-b border-border bg-card flex items-center justify-between px-4">
-      {/* Left: Logo & Project Name */}
+      {/* Left: Theme Toggle & Logo & Project Name */}
       <div className="flex items-center gap-4">
+        {/* Theme Toggle */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon">
+              {theme === 'dark' ? (
+                <Moon className="h-4 w-4" />
+              ) : theme === 'light' ? (
+                <Sun className="h-4 w-4" />
+              ) : (
+                <Monitor className="h-4 w-4" />
+              )}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <DropdownMenuItem onClick={() => setTheme('light')}>
+              <Sun className="h-4 w-4 mr-2" />
+              Light
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setTheme('dark')}>
+              <Moon className="h-4 w-4 mr-2" />
+              Dark
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setTheme('system')}>
+              <Monitor className="h-4 w-4 mr-2" />
+              System
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded bg-primary flex items-center justify-center">
             <span className="text-primary-foreground font-bold text-sm">AB</span>
