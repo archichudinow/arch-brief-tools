@@ -12,6 +12,7 @@ const CreateAreasProposalSchema = z.object({
     count: z.number().int().positive(),
     briefNote: z.string().optional(),
     aiNote: z.string().optional(),
+    groupHint: z.string().optional(),  // Suggested group name for auto-grouping
   })),
 });
 

@@ -9,6 +9,9 @@ import type { UUID } from '@/types';
 type PanelType = 'inspector' | 'history' | null;
 type InspectorTab = 'details' | 'notes';
 
+/** Detail level for AI program generation */
+export type DetailLevel = 'abstract' | 'standard' | 'detailed';
+
 interface UIState {
   // Selection
   selectedNodeIds: UUID[];
@@ -24,6 +27,9 @@ interface UIState {
   
   // Board interaction mode
   isAddingComment: boolean;
+  
+  // AI settings
+  detailLevel: DetailLevel;
   
   // Actions - Selection
   selectNodes: (ids: UUID[], append?: boolean) => void;
@@ -42,6 +48,9 @@ interface UIState {
   
   // Actions - Board interaction
   setAddingComment: (adding: boolean) => void;
+  
+  // Actions - AI settings
+  setDetailLevel: (level: DetailLevel) => void;
 }
 
 // ============================================
@@ -58,6 +67,7 @@ export const useUIStore = create<UIState>()(
     inspectorTab: 'details',
     showAiChat: false,
     isAddingComment: false,
+    detailLevel: 'standard',
 
     // Selection actions
     selectNodes: (ids, append = false) => {
@@ -151,6 +161,13 @@ export const useUIStore = create<UIState>()(
     setAddingComment: (adding) => {
       set((state) => {
         state.isAddingComment = adding;
+      });
+    },
+
+    // AI settings actions
+    setDetailLevel: (level) => {
+      set((state) => {
+        state.detailLevel = level;
       });
     },
   }))

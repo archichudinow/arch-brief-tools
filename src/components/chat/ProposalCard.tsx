@@ -45,18 +45,40 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
     
     // Apply proposal based on type
     switch (accepted.type) {
-      case 'create_areas':
+      case 'create_areas': {
         console.log('Creating areas:', accepted.areas);
         snapshot('ai-create-areas', `AI: Create ${accepted.areas.length} areas`, { nodes, groups });
+        
+        // Track created nodes by their groupHint for auto-grouping
+        const nodesByGroup: Record<string, string[]> = {};
+        
         accepted.areas.forEach((area) => {
-          createNode({
+          const nodeId = createNode({
             name: area.name,
             areaPerUnit: area.areaPerUnit,
             count: area.count,
             userNote: area.briefNote,
           });
+          
+          // Collect nodes by groupHint
+          if (area.groupHint) {
+            if (!nodesByGroup[area.groupHint]) {
+              nodesByGroup[area.groupHint] = [];
+            }
+            nodesByGroup[area.groupHint].push(nodeId);
+          }
+        });
+        
+        // Auto-create groups and assign nodes
+        Object.entries(nodesByGroup).forEach(([groupName, nodeIds]) => {
+          if (nodeIds.length > 0) {
+            console.log('Auto-creating group:', groupName, 'with nodes:', nodeIds);
+            const groupId = createGroup({ name: groupName });
+            assignToGroup(groupId, nodeIds);
+          }
         });
         break;
+      }
         
       case 'split_area': {
         console.log('Splitting area:', accepted.sourceName, 'into', accepted.splits);

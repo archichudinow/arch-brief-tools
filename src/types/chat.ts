@@ -65,6 +65,7 @@ export interface CreateAreasProposal {
     count: number;
     briefNote?: string;
     aiNote?: string;
+    groupHint?: string;  // Suggested group name for auto-grouping
   }>;
   status: ProposalStatus;
 }

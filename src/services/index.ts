@@ -3,3 +3,4 @@ export * from './aiValidation';
 export * from './aiPrompts';
 export * from './briefAnalyzer';
 export * from './briefStrategies';
+export * from './areaOperations';export * from './intentExecutor';

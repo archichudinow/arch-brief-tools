@@ -17,43 +17,49 @@ INSTRUCTIONS:
 2. Apply standard space ratios for this typology
 3. Generate a complete program with logical groups and areas
 4. Include circulation, services, and support spaces
-5. Use metric units (m²)
+5. Output PERCENTAGES, not m² values - code will calculate exact areas
 
-TYPOLOGY STANDARDS (adjust to scale):
-- Office: 8-12 m² per workstation, 15-20% circulation, meeting rooms 10-15% of work area
-- Residential: 30-50 m² per unit, 10-15% common circulation
-- Retail: 70-80% sales floor, 20-30% back-of-house
-- Hotel: 25-35 m² per room, F&B 15-20%, lobby 5-8%, BOH 15-20%
-- Cultural: 50-60% public/exhibit, 20-25% support, 15-20% circulation
-- Educational: 2-3 m² per student in classrooms, 30-40% circulation/common
+TYPOLOGY STANDARDS (as percentage of total):
+- Office: Workstations 50-60%, Meeting 10-15%, Circulation 15-20%, Support 10-15%
+- Residential: Units 60-70%, Common 15-20%, Circulation 10-15%, Services 5-10%
+- Retail: Sales floor 65-75%, Back-of-house 20-30%, Circulation 5-10%
+- Hotel: Guest rooms 60-70%, F&B 10-15%, Lobby/public 5-10%, BOH 10-15%
+- Cultural: Public/exhibit 50-60%, Support 15-25%, Circulation 15-20%
+- Educational: Classrooms 40-50%, Labs/workshops 15-20%, Circulation 20-30%, Admin 10%
+
+CRITICAL: Output percentages that sum to 100. Code will multiply by target to get exact m².
 
 OUTPUT FORMAT (JSON only):
 {
   "interpretation": "How I understood the request",
   "buildingType": "office | residential | retail | hotel | cultural | educational | mixed",
-  "targetArea": 1234,
-  "assumptions": [
-    "Assumed X because...",
-    "Used Y standard for..."
-  ],
+  "targetArea": 5000,
   "areas": [
-    { "name": "Open Workstations", "areaPerUnit": 250, "count": 1, "aiNote": "50 positions × 5m² direct + circulation" }
+    { "name": "Open Workstations", "percentage": 45, "groupHint": "Work Areas", "aiNote": "Based on ~8m² per workstation" },
+    { "name": "Private Offices", "percentage": 10, "groupHint": "Work Areas", "aiNote": "For managers/directors" },
+    { "name": "Meeting Rooms", "percentage": 12, "groupHint": "Work Areas", "aiNote": "Mix of sizes" },
+    { "name": "Reception & Lobby", "percentage": 5, "groupHint": "Public", "aiNote": "First impression space" },
+    { "name": "Break Room & Pantry", "percentage": 6, "groupHint": "Amenities" },
+    { "name": "Restrooms", "percentage": 4, "groupHint": "Services" },
+    { "name": "Storage & MEP", "percentage": 6, "groupHint": "Services" },
+    { "name": "Circulation", "percentage": 12, "groupHint": "Circulation" }
   ],
   "detectedGroups": [
-    { "name": "Work Areas", "color": "#3b82f6", "areaNames": ["Open Workstations", "Private Offices"] }
+    { "name": "Work Areas", "color": "#3b82f6", "areaNames": ["Open Workstations", "Private Offices", "Meeting Rooms"] },
+    { "name": "Amenities", "color": "#22c55e", "areaNames": ["Break Room & Pantry"] },
+    { "name": "Services", "color": "#f59e0b", "areaNames": ["Restrooms", "Storage & MEP"] }
   ],
-  "parsedTotal": 1234,
-  "breakdown": {
-    "primaryFunction": { "percentage": 60, "area": 740 },
-    "support": { "percentage": 20, "area": 247 },
-    "circulation": { "percentage": 20, "area": 247 }
-  },
-  "projectContext": "Office for 50 people with standard amenities",
+  "assumptions": [
+    "Assumed standard office layout",
+    "Used 8m² per workstation (open plan)"
+  ],
+  "projectContext": "Office for approximately N people with standard amenities",
   "suggestions": [
-    "Consider adding X if budget allows",
-    "Y is optional but recommended"
+    "Consider adding focus rooms if budget allows"
   ]
 }
+
+REMEMBER: percentages must sum to 100. The code will calculate: areaPerUnit = (percentage / 100) × targetArea
 `;
 
 // ============================================

@@ -42,6 +42,18 @@ import {
   formatAreasForReconciliation,
   GROUP_COLORS,
 } from './briefStrategies';
+import {
+  detectNumericIntent,
+  executeScaleOperation,
+  executeAdjustByPercent,
+  type DetectedIntent,
+} from './areaOperations';
+import {
+  validateIntent,
+  executeIntent,
+  type AIIntent,
+} from './intentExecutor';
+
 
 // ============================================
 // TYPES
@@ -85,8 +97,10 @@ function formatNodeContext(nodes: AreaNode[], level: ContextLevel): string {
   if (nodes.length === 0) return '';
   
   let context = 'Areas:\n';
+  let totalArea = 0;
   nodes.forEach((node) => {
     const total = node.count * node.areaPerUnit;
+    totalArea += total;
     context += `- ID: "${node.id}" | Name: "${node.name}" | ${node.count} × ${node.areaPerUnit}m² = ${total}m²`;
     
     // Include notes only for standard/full context
@@ -96,6 +110,10 @@ function formatNodeContext(nodes: AreaNode[], level: ContextLevel): string {
     }
     context += '\n';
   });
+  
+  // Add total for math calculations
+  context += `\n>>> CURRENT TOTAL: ${totalArea}m² (${nodes.length} areas) <<<\n`;
+  
   return context;
 }
 
@@ -370,6 +388,103 @@ function parseAndValidateConsultationResponse(
 }
 
 // ============================================
+// INTENT-BASED RESPONSE PROCESSING
+// ============================================
+
+/**
+ * Process AI response through intent system
+ * Converts ratio-based intents to exact proposals
+ */
+function parseAndProcessIntentResponse(
+  responseText: string,
+  existingNodes: AreaNode[],
+  existingGroups: Group[]
+): { success: true; data: AIResponse } | { success: false; error: AIError } {
+  let parsed: unknown;
+  
+  try {
+    parsed = JSON.parse(responseText);
+  } catch {
+    return {
+      success: false,
+      error: {
+        type: 'parse_error',
+        message: 'Invalid JSON response from AI',
+        rawResponse: responseText,
+      },
+    };
+  }
+
+  const output = parsed as Record<string, unknown>;
+  const message = (output.message as string) || 'AI proposal';
+
+  // Check if this is an intent-based response
+  if (output.intent && typeof output.intent === 'object') {
+    console.log('Processing intent-based response:', output.intent);
+    
+    const intent = output.intent as AIIntent;
+    
+    // Validate intent
+    const validation = validateIntent(intent, existingNodes, existingGroups);
+    if (!validation.valid) {
+      console.warn('Intent validation failed:', validation.errors);
+      return {
+        success: false,
+        error: {
+          type: 'validation_error',
+          message: `Invalid intent: ${validation.errors.join(', ')}`,
+          rawResponse: responseText,
+        },
+      };
+    }
+    
+    // Log warnings
+    if (validation.warnings.length > 0) {
+      console.warn('Intent warnings:', validation.warnings);
+    }
+    
+    // Execute intent to produce proposals
+    try {
+      const result = executeIntent(intent, existingNodes, existingGroups);
+      
+      console.log('Intent executed, proposals:', result.proposals);
+      
+      // Validate produced proposals
+      const validatedProposals: Array<Omit<Proposal, 'id' | 'status'>> = [];
+      for (const proposal of result.proposals) {
+        const proposalValidation = validateProposal(proposal);
+        if (proposalValidation.success) {
+          validatedProposals.push(proposalValidation.data!);
+        } else {
+          console.warn('Produced proposal failed validation:', proposalValidation.error);
+        }
+      }
+      
+      return {
+        success: true,
+        data: {
+          message: result.message || message,
+          proposals: validatedProposals.length > 0 ? validatedProposals : undefined,
+        },
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          type: 'validation_error',
+          message: error instanceof Error ? error.message : 'Intent execution failed',
+          rawResponse: responseText,
+        },
+      };
+    }
+  }
+  
+  // Fallback: Try legacy format with proposals array
+  console.log('Processing legacy proposal format...');
+  return parseAndValidateAgentResponse(responseText);
+}
+
+// ============================================
 // PROPOSAL HELPERS
 // ============================================
 
@@ -381,6 +496,27 @@ export function addIdsToProposals(
     id: uuidv4(),
     status: 'pending' as const,
   })) as Proposal[];
+}
+
+/**
+ * Process raw AI response through intent system (for external use)
+ * Called after sendChatMessage to convert intents to proposals
+ */
+export function processIntentResponse(
+  rawResponse: string,
+  existingNodes: AreaNode[],
+  existingGroups: Group[]
+): AIResponse {
+  const result = parseAndProcessIntentResponse(rawResponse, existingNodes, existingGroups);
+  
+  if (!result.success) {
+    console.error('Intent processing failed:', result.error);
+    return {
+      message: result.error.message + (result.error.details ? `: ${result.error.details}` : ''),
+    };
+  }
+  
+  return result.data;
 }
 
 // ============================================
@@ -399,7 +535,8 @@ function getApiKey(): string {
 
 export async function sendChatMessage(
   request: ChatRequest,
-  mode: ChatMode = 'agent'
+  mode: ChatMode = 'agent',
+  context?: { nodes: AreaNode[]; groups: Group[] }
 ): Promise<AIResponse> {
   const apiKey = getApiKey();
   
@@ -431,9 +568,18 @@ export async function sendChatMessage(
   console.log('AI Response raw:', content);
   
   // Parse and validate based on mode
-  const result = mode === 'agent'
-    ? parseAndValidateAgentResponse(content)
-    : parseAndValidateConsultationResponse(content);
+  // For agent mode with context, use intent processing (two-phase architecture)
+  let result: { success: true; data: AIResponse } | { success: false; error: AIError };
+  
+  if (mode === 'agent' && context) {
+    // NEW: Two-phase processing - extract intent, execute with code
+    result = parseAndProcessIntentResponse(content, context.nodes, context.groups);
+  } else if (mode === 'agent') {
+    // Legacy: direct proposal processing (no context for intent)
+    result = parseAndValidateAgentResponse(content);
+  } else {
+    result = parseAndValidateConsultationResponse(content);
+  }
   
   if (!result.success) {
     console.error('AI response validation failed:', result.error);
@@ -444,6 +590,158 @@ export async function sendChatMessage(
   }
   
   return result.data;
+}
+
+// ============================================
+// DETERMINISTIC OPERATIONS - Code handles math
+// ============================================
+
+export interface DeterministicResult {
+  handled: boolean;
+  intent?: DetectedIntent;
+  response?: AIResponse;
+}
+
+/**
+ * Try to handle the request with deterministic code (no LLM for math).
+ * Returns { handled: true, response } if handled, { handled: false } otherwise.
+ */
+export function tryDeterministicOperation(
+  userMessage: string,
+  selectedNodes: AreaNode[],
+  selectedGroups: Group[],
+  allNodes: Record<UUID, AreaNode>
+): DeterministicResult {
+  const intent = detectNumericIntent(userMessage);
+  
+  console.log('Intent detection:', intent);
+  
+  // Only handle high-confidence numeric operations
+  if (intent.confidence < 0.8) {
+    return { handled: false, intent };
+  }
+  
+  // Get nodes to operate on
+  const groupMemberNodes: AreaNode[] = selectedGroups.flatMap((group) =>
+    group.members.map((id) => allNodes[id]).filter(Boolean)
+  );
+  const nodesToOperate = [
+    ...selectedNodes,
+    ...groupMemberNodes.filter((n) => !selectedNodes.some((s) => s.id === n.id)),
+  ];
+  
+  // If nothing selected, operate on all
+  const targetNodes = nodesToOperate.length > 0 
+    ? nodesToOperate 
+    : Object.values(allNodes);
+  
+  if (targetNodes.length === 0) {
+    return { handled: false, intent };
+  }
+  
+  const currentTotal = targetNodes.reduce(
+    (sum, n) => sum + n.areaPerUnit * n.count, 
+    0
+  );
+  
+  // Handle SCALE TO TARGET
+  if (intent.type === 'scale_to_target' && intent.targetValue) {
+    console.log(`Deterministic: Scaling from ${currentTotal}m² to ${intent.targetValue}m²`);
+    
+    const updates = executeScaleOperation(
+      {
+        op: 'scale_to_target',
+        targetArea: intent.targetValue,
+        scope: nodesToOperate.length > 0 ? 'selected' : 'all',
+        method: 'proportional',
+        nodeIds: targetNodes.map(n => n.id),
+      },
+      targetNodes
+    );
+    
+    if (updates.length === 0) {
+      return { handled: false, intent };
+    }
+    
+    // Build proposal - use explicit typing for discriminated union
+    const proposal = {
+      type: 'update_areas' as const,
+      updates: updates.map(u => {
+        const node = targetNodes.find(n => n.id === u.nodeId)!;
+        return {
+          nodeId: u.nodeId,
+          nodeName: node.name,
+          changes: { areaPerUnit: u.newAreaPerUnit },
+        };
+      }),
+    };
+    
+    // Calculate new total for message
+    const newTotal = updates.reduce((sum, u) => {
+      const node = targetNodes.find(n => n.id === u.nodeId)!;
+      return sum + u.newAreaPerUnit * node.count;
+    }, 0);
+    
+    return {
+      handled: true,
+      intent,
+      response: {
+        message: `Scaled ${targetNodes.length} areas from ${currentTotal}m² to ${newTotal}m² (target: ${intent.targetValue}m²)`,
+        proposals: [proposal],
+      },
+    };
+  }
+  
+  // Handle ADJUST BY PERCENT
+  if (intent.type === 'adjust_percent' && intent.percent !== undefined) {
+    console.log(`Deterministic: Adjusting by ${intent.percent}%`);
+    
+    const updates = executeAdjustByPercent(
+      {
+        op: 'adjust_by_percent',
+        percent: intent.percent,
+        scope: nodesToOperate.length > 0 ? 'selected' : 'all',
+        nodeIds: targetNodes.map(n => n.id),
+      },
+      targetNodes
+    );
+    
+    if (updates.length === 0) {
+      return { handled: false, intent };
+    }
+    
+    // Build proposal - use explicit typing for discriminated union
+    const proposal = {
+      type: 'update_areas' as const,
+      updates: updates.map(u => {
+        const node = targetNodes.find(n => n.id === u.nodeId)!;
+        return {
+          nodeId: u.nodeId,
+          nodeName: node.name,
+          changes: { areaPerUnit: u.newAreaPerUnit },
+        };
+      }),
+    };
+    
+    // Calculate new total for message
+    const newTotal = updates.reduce((sum, u) => {
+      const node = targetNodes.find(n => n.id === u.nodeId)!;
+      return sum + u.newAreaPerUnit * node.count;
+    }, 0);
+    
+    const direction = intent.percent > 0 ? 'Increased' : 'Decreased';
+    
+    return {
+      handled: true,
+      intent,
+      response: {
+        message: `${direction} ${targetNodes.length} areas by ${Math.abs(intent.percent)}%: ${currentTotal}m² → ${newTotal}m²`,
+        proposals: [proposal],
+      },
+    };
+  }
+  
+  return { handled: false, intent };
 }
 
 // ============================================
@@ -803,16 +1101,83 @@ async function parseWithGenerateStrategy(promptText: string, apiKey: string): Pr
     throw { type: 'parse_error', message: 'Invalid JSON in generate response' } as AIError;
   }
   
-  // Map to ParsedBrief format
-  const areas = (parsed.areas as Array<{ name: string; areaPerUnit: number; count: number; aiNote?: string }>) || [];
+  // Get target area from response
+  const targetArea = (parsed.targetArea as number) || 0;
+  
+  // Handle both percentage-based (new) and area-based (legacy) responses
+  const rawAreas = (parsed.areas as Array<{
+    name: string;
+    percentage?: number;
+    areaPerUnit?: number;
+    count?: number;
+    groupHint?: string;
+    aiNote?: string;
+  }>) || [];
+  
   const detectedGroups = (parsed.detectedGroups as Array<{ name: string; color: string; areaNames: string[] }>) || [];
   
-  const formattedAreas = areas.map(a => ({
-    name: a.name,
-    areaPerUnit: a.areaPerUnit,
-    count: a.count || 1,
-    aiNote: a.aiNote,
-  }));
+  let formattedAreas: Array<{
+    name: string;
+    areaPerUnit: number;
+    count: number;
+    groupHint?: string;
+    aiNote?: string;
+  }>;
+  
+  // Check if response uses percentages (new format) or absolute areas (legacy)
+  const usesPercentages = rawAreas.length > 0 && rawAreas[0].percentage !== undefined;
+  
+  if (usesPercentages && targetArea > 0) {
+    // NEW: Convert percentages to exact areas using deterministic math
+    console.log('Converting percentages to exact areas...');
+    
+    const totalPercent = rawAreas.reduce((sum, a) => sum + (a.percentage || 0), 0);
+    
+    // Convert each area
+    const convertedAreas = rawAreas.map(a => {
+      const normalizedPercent = totalPercent > 0 
+        ? ((a.percentage || 0) / totalPercent) * 100 
+        : 100 / rawAreas.length;
+      const exactArea = Math.round((normalizedPercent / 100) * targetArea);
+      
+      return {
+        name: a.name,
+        areaPerUnit: exactArea,
+        count: 1,
+        groupHint: a.groupHint,
+        aiNote: a.aiNote ? `${a.aiNote} (${a.percentage}%)` : `${a.percentage}% of program`,
+      };
+    });
+    
+    // Fix rounding errors by adjusting largest area
+    const currentTotal = convertedAreas.reduce((sum, a) => sum + a.areaPerUnit, 0);
+    const roundingError = targetArea - currentTotal;
+    
+    if (roundingError !== 0 && convertedAreas.length > 0) {
+      const largestIndex = convertedAreas.reduce(
+        (maxIdx, area, idx, arr) => 
+          area.areaPerUnit > arr[maxIdx].areaPerUnit ? idx : maxIdx,
+        0
+      );
+      convertedAreas[largestIndex].areaPerUnit += roundingError;
+    }
+    
+    formattedAreas = convertedAreas;
+    
+    // Verify total
+    const verifiedTotal = formattedAreas.reduce((sum, a) => sum + a.areaPerUnit * a.count, 0);
+    console.log(`Target: ${targetArea}m², Actual: ${verifiedTotal}m², Match: ${verifiedTotal === targetArea}`);
+  } else {
+    // LEGACY: Use absolute areas as provided
+    console.log('Using legacy absolute areas format...');
+    formattedAreas = rawAreas.map(a => ({
+      name: a.name,
+      areaPerUnit: a.areaPerUnit || 0,
+      count: a.count || 1,
+      groupHint: a.groupHint,
+      aiNote: a.aiNote,
+    }));
+  }
   
   const parsedTotal = formattedAreas.reduce((sum, a) => sum + a.areaPerUnit * a.count, 0);
   
@@ -824,7 +1189,7 @@ async function parseWithGenerateStrategy(promptText: string, apiKey: string): Pr
       areaNames: g.areaNames,
     })) : undefined,
     hasGroupStructure: detectedGroups.length > 0,
-    briefTotal: (parsed.targetArea as number) || null,
+    briefTotal: targetArea || null,
     parsedTotal,
     projectContext: (parsed.projectContext as string) || (parsed.interpretation as string) || '',
     suggestedAreas: [],

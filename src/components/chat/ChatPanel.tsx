@@ -5,9 +5,17 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { useChatStore, useUIStore, useProjectStore } from '@/stores';
-import { sendChatMessage, buildChatRequest, addIdsToProposals, enhancePrompt, type EnhancedPrompt } from '@/services';
+import { 
+  sendChatMessage, 
+  buildChatRequest, 
+  addIdsToProposals, 
+  enhancePrompt, 
+  tryDeterministicOperation,
+  type EnhancedPrompt 
+} from '@/services';
 import { MessageBubble } from './MessageBubble';
 import { BriefInput } from './BriefInput';
+import { DetailLevelSelector } from './DetailLevelSelector';
 import { 
   Send, 
   Loader2, 
@@ -59,6 +67,7 @@ export function ChatPanel() {
   
   const selectedNodeIds = useUIStore((s) => s.selectedNodeIds);
   const selectedGroupIds = useUIStore((s) => s.selectedGroupIds);
+  const detailLevel = useUIStore((s) => s.detailLevel);
   
   const nodes = useProjectStore((s) => s.nodes);
   const groups = useProjectStore((s) => s.groups);
@@ -89,18 +98,47 @@ export function ChatPanel() {
     
     const content = inputValue.trim();
     
+    // Prepend detail level prefix if not standard
+    const detailPrefix = 
+      detailLevel === 'abstract' ? '[ABSTRACT LEVEL - create only 4-6 high-level zones] ' :
+      detailLevel === 'detailed' ? '[DETAILED LEVEL - create 40-60+ specific rooms/areas] ' : '';
+    const contentWithLevel = detailPrefix + content;
+    
     // Get selected items
     const selectedNodes = selectedNodeIds.map((id) => nodes[id]).filter(Boolean);
     const selectedGroups = selectedGroupIds.map((id) => groups[id]).filter(Boolean);
     
-    // Add user message
+    // Add user message (show original without prefix)
     addUserMessage(content, selectedNodeIds, selectedGroupIds);
     setLoading(true);
     
     try {
+      // FIRST: Try deterministic operation (for scale/adjust - faster, exact math)
+      const deterministicResult = tryDeterministicOperation(
+        contentWithLevel,
+        selectedNodes,
+        selectedGroups,
+        nodes
+      );
+      
+      if (deterministicResult.handled && deterministicResult.response) {
+        console.log('Handled deterministically:', deterministicResult.intent?.type);
+        
+        const proposals = deterministicResult.response.proposals
+          ? addIdsToProposals(deterministicResult.response.proposals)
+          : undefined;
+        
+        addAIMessage(deterministicResult.response.message, proposals);
+        setLoading(false);
+        return;
+      }
+      
+      // FALLBACK: Use LLM for complex/creative operations
+      console.log('Using LLM (intent:', deterministicResult.intent?.type || 'none', ')');
+      
       // Build request with chat mode configuration
       const request = buildChatRequest(
-        content,
+        contentWithLevel,
         projectContext,
         selectedNodes,
         selectedGroups,
@@ -109,8 +147,15 @@ export function ChatPanel() {
         { mode: chatMode, role: aiRole ?? undefined }
       );
       
-      // Send to AI with mode
-      const response = await sendChatMessage(request, chatMode);
+      // Send to AI with mode and context for intent processing
+      // In agent mode, pass nodes/groups so intents can be executed with exact math
+      const allNodes = Object.values(nodes);
+      const allGroups = Object.values(groups);
+      const response = await sendChatMessage(
+        request, 
+        chatMode,
+        chatMode === 'agent' ? { nodes: allNodes, groups: allGroups } : undefined
+      );
       
       console.log('Chat response:', response);
       console.log('Proposals from response:', response.proposals);
@@ -192,7 +237,14 @@ export function ChatPanel() {
         { mode: chatMode, role: aiRole ?? undefined }
       );
       
-      const response = await sendChatMessage(request, chatMode);
+      // Pass context for intent processing in agent mode
+      const allNodes = Object.values(nodes);
+      const allGroups = Object.values(groups);
+      const response = await sendChatMessage(
+        request, 
+        chatMode,
+        chatMode === 'agent' ? { nodes: allNodes, groups: allGroups } : undefined
+      );
       
       const proposals = response.proposals
         ? addIdsToProposals(response.proposals)
@@ -253,14 +305,39 @@ export function ChatPanel() {
       
       {/* Mode indicator */}
       {!briefMode && (
-        <div className="px-4 py-1 bg-muted/30 text-xs border-b border-border flex items-center gap-2">
-          <span className="text-muted-foreground">Mode:</span>
-          <Badge variant={chatMode === 'agent' ? 'default' : 'secondary'} className="text-xs">
-            {chatMode === 'agent' ? 'Agent' : 'Consultation'}
-          </Badge>
-          <span className="text-muted-foreground text-xs">
-            {chatMode === 'agent' ? '(proposes actions)' : '(answers questions)'}
-          </span>
+        <div className="px-3 py-2 bg-muted/30 text-xs border-b border-border space-y-1.5">
+          {/* Row 1: Mode and Context */}
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-1.5">
+              <span className="text-muted-foreground">Mode:</span>
+              <Badge variant={chatMode === 'agent' ? 'default' : 'secondary'} className="text-[10px] h-5">
+                {chatMode === 'agent' ? 'Agent' : 'Q&A'}
+              </Badge>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-muted-foreground">Context:</span>
+              {(selectedNodeIds.length > 0 || selectedGroupIds.length > 0) ? (
+                <div className="flex items-center gap-1">
+                  {selectedNodeIds.length > 0 && (
+                    <Badge variant="outline" className="text-[10px] h-5">
+                      {selectedNodeIds.length} area{selectedNodeIds.length > 1 ? 's' : ''}
+                    </Badge>
+                  )}
+                  {selectedGroupIds.length > 0 && (
+                    <Badge variant="outline" className="text-[10px] h-5">
+                      {selectedGroupIds.length} group{selectedGroupIds.length > 1 ? 's' : ''}
+                    </Badge>
+                  )}
+                </div>
+              ) : (
+                <Badge variant="secondary" className="text-[10px] h-5">
+                  All {Object.keys(nodes).length}
+                </Badge>
+              )}
+            </div>
+          </div>
+          {/* Row 2: Detail Level */}
+          <DetailLevelSelector />
         </div>
       )}
       
@@ -268,40 +345,6 @@ export function ChatPanel() {
         <BriefInput />
       ) : (
         <>
-          {/* Context bar */}
-          <div className="px-4 py-2 bg-muted/50 text-xs border-b border-border">
-            {(selectedNodeIds.length > 0 || selectedGroupIds.length > 0) ? (
-              <>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-muted-foreground">Context:</span>
-                  {selectedNodeIds.length > 0 && (
-                    <Badge variant="outline" className="text-xs">
-                      {selectedNodeIds.length} area{selectedNodeIds.length > 1 ? 's' : ''}
-                    </Badge>
-                  )}
-                  {selectedGroupIds.length > 0 && (
-                    <Badge variant="outline" className="text-xs">
-                      {selectedGroupIds.length} group{selectedGroupIds.length > 1 ? 's' : ''}
-                    </Badge>
-                  )}
-                </div>
-                {selectedNodeIds.length > 0 && selectedNodeIds.length <= 5 && (
-                  <div className="mt-1 text-muted-foreground truncate">
-                    {selectedNodeIds.map((id) => nodes[id]?.name).filter(Boolean).join(', ')}
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="flex items-center gap-2 text-muted-foreground">
-                <span>Context:</span>
-                <Badge variant="secondary" className="text-xs">
-                  All {Object.keys(nodes).length} areas
-                </Badge>
-                <span className="text-xs italic">(select specific areas to narrow context)</span>
-              </div>
-            )}
-          </div>
-          
           {/* Messages */}
           <ScrollArea className="flex-1 min-h-0" ref={scrollRef}>
             <div className="px-4 py-4">
