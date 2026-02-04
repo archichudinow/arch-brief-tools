@@ -7,11 +7,6 @@ interface ExportData {
   groups: Record<string, Group>;
 }
 
-// Convert hex color to ARGB format for ExcelJS (without #)
-function hexToArgb(hex: string): string {
-  return 'FF' + hex.replace('#', '').toUpperCase();
-}
-
 // Convert a hex color to a pastel version (mix with white)
 function hexToPastel(hex: string, mixRatio = 0.6): string {
   const color = hex.replace('#', '');
@@ -28,16 +23,6 @@ function hexToPastel(hex: string, mixRatio = 0.6): string {
     pastelR.toString(16).padStart(2, '0').toUpperCase() +
     pastelG.toString(16).padStart(2, '0').toUpperCase() +
     pastelB.toString(16).padStart(2, '0').toUpperCase();
-}
-
-// Determine if color is light or dark to choose contrasting text
-function isLightColor(hex: string): boolean {
-  const color = hex.replace('#', '');
-  const r = parseInt(color.substring(0, 2), 16);
-  const g = parseInt(color.substring(2, 4), 16);
-  const b = parseInt(color.substring(4, 6), 16);
-  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-  return luminance > 0.5;
 }
 
 export async function exportToExcel(data: ExportData): Promise<void> {

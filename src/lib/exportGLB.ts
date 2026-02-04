@@ -495,10 +495,6 @@ export async function exportToGLB(data: ExportGLBData): Promise<void> {
   const summedGroup = new THREE.Group();
   summedGroup.name = 'ProjectProgram_WithGroups';
   
-  // First, calculate layout of summed rectangles to determine project bounds
-  let summedOffsetX = 0;
-  let summedOffsetZ = 0;
-  let summedMaxRowDepth = 0;
   const summedSpacing = 2;
   const summedPadding = 3; // Padding inside project rectangle
   

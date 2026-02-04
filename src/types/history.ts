@@ -56,4 +56,7 @@ export type ActionType =
   | 'ai-update'
   | 'ai-create-groups'
   | 'ai-assign'
-  | 'ai-add-notes';
+  | 'ai-add-notes'
+  | 'ai-split-group'
+  | 'ai-split-group-prop'
+  | 'ai-merge-group';
