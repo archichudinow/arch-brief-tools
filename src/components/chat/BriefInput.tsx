@@ -5,7 +5,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { useChatStore, useProjectStore, useHistoryStore } from '@/stores';
-import { parseBrief } from '@/services';
+import { parseBrief, sendChatMessage, buildChatRequest, addIdsToProposals } from '@/services';
 import type { ParsedBrief, ParsedBriefArea } from '@/types';
 import { 
   FileText, 
@@ -14,10 +14,15 @@ import {
   X, 
   AlertTriangle,
   Plus,
-  Sparkles
+  Sparkles,
+  FolderTree,
+  Layers,
+  Calculator,
+  CheckCircle2,
+  XCircle
 } from 'lucide-react';
 
-type ParseState = 'input' | 'parsing' | 'preview' | 'error';
+type ParseState = 'input' | 'parsing' | 'preview' | 'error' | 'organizing';
 
 export function BriefInput() {
   const briefText = useChatStore((s) => s.briefText);
@@ -27,6 +32,8 @@ export function BriefInput() {
   const setBriefMode = useChatStore((s) => s.setBriefMode);
   
   const createNode = useProjectStore((s) => s.createNode);
+  const createGroup = useProjectStore((s) => s.createGroup);
+  const assignToGroup = useProjectStore((s) => s.assignToGroup);
   const nodes = useProjectStore((s) => s.nodes);
   const groups = useProjectStore((s) => s.groups);
   const snapshot = useHistoryStore((s) => s.snapshot);
@@ -36,6 +43,9 @@ export function BriefInput() {
   const [selectedAreas, setSelectedAreas] = useState<Set<number>>(new Set());
   const [selectedSuggested, setSelectedSuggested] = useState<Set<number>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  const [autoOrganize, setAutoOrganize] = useState(false);
+  
+  const addAIMessage = useChatStore((s) => s.addAIMessage);
   
   const handleParse = async () => {
     if (!briefText.trim()) return;
@@ -82,7 +92,7 @@ export function BriefInput() {
     });
   };
   
-  const handleApply = () => {
+  const handleApply = async () => {
     if (!parsedBrief) return;
     
     const areasToCreate: ParsedBriefArea[] = [
@@ -98,28 +108,112 @@ export function BriefInput() {
     // Snapshot before creating
     snapshot('parse-brief', `Parse brief: ${areasToCreate.length} areas`, { nodes, groups });
     
-    // Create areas
+    // Create areas and collect IDs
+    const createdNodeIds: string[] = [];
     areasToCreate.forEach((area) => {
-      createNode({
+      const id = createNode({
         name: area.name,
         areaPerUnit: area.areaPerUnit,
         count: area.count,
-        userNote: area.briefNote || area.aiNote,
       });
+      if (id) createdNodeIds.push(id);
     });
     
     // Set project context
-    if (parsedBrief.projectContext) {
-      setProjectContext(parsedBrief.projectContext);
+    const contextText = parsedBrief.projectContext || '';
+    if (contextText) {
+      setProjectContext(contextText);
     }
     
     addSystemMessage(`Created ${areasToCreate.length} areas from brief`, 'success');
+    
+    // Auto-organize into groups if enabled
+    if (autoOrganize && createdNodeIds.length > 0) {
+      setParseState('organizing');
+      
+      // Check if brief has detected group structure
+      const hasDetectedGroups = parsedBrief.hasGroupStructure && 
+        parsedBrief.detectedGroups && 
+        parsedBrief.detectedGroups.length > 0;
+      
+      if (hasDetectedGroups) {
+        // Use the group structure from the brief
+        try {
+          const currentNodes = useProjectStore.getState().nodes;
+          
+          // Build a map of area name -> node ID for matching
+          const nameToNodeId: Record<string, string> = {};
+          createdNodeIds.forEach(id => {
+            const node = currentNodes[id];
+            if (node) {
+              nameToNodeId[node.name.toLowerCase()] = id;
+            }
+          });
+          
+          let groupsCreated = 0;
+          for (const detectedGroup of parsedBrief.detectedGroups!) {
+            // Find matching node IDs for this group
+            const memberIds = detectedGroup.areaNames
+              .map(name => nameToNodeId[name.toLowerCase()])
+              .filter(Boolean);
+            
+            if (memberIds.length > 0) {
+              const groupId = createGroup({
+                name: detectedGroup.name,
+                color: detectedGroup.color,
+              });
+              
+              if (groupId) {
+                assignToGroup(groupId, memberIds);
+                groupsCreated++;
+              }
+            }
+          }
+          
+          if (groupsCreated > 0) {
+            addSystemMessage(`Created ${groupsCreated} groups from brief structure`, 'success');
+          }
+        } catch (err) {
+          console.error('Failed to create groups from brief:', err);
+          addSystemMessage('Created areas but could not apply group structure', 'warning');
+        }
+      } else {
+        // No group structure in brief - ask AI to propose groups
+        try {
+          const currentNodes = useProjectStore.getState().nodes;
+          const currentGroups = useProjectStore.getState().groups;
+          const newNodes = createdNodeIds.map(id => currentNodes[id]).filter(Boolean);
+          
+          const request = buildChatRequest(
+            'Organize these areas into logical functional groups. Create groups with appropriate names and colors.',
+            contextText,
+            newNodes,
+            [],
+            currentNodes,
+            currentGroups,
+            { mode: 'agent', contextLevel: 'standard' }
+          );
+          
+          const response = await sendChatMessage(request, 'agent');
+          
+          if (response.proposals && response.proposals.length > 0) {
+            const proposals = addIdsToProposals(response.proposals);
+            addAIMessage(response.message, proposals);
+            addSystemMessage('AI proposed groups for your areas. Review in chat.', 'info');
+          }
+        } catch (err) {
+          console.error('Auto-organize failed:', err);
+          addSystemMessage('Could not auto-organize. You can organize manually.', 'warning');
+        }
+      }
+    }
     
     // Switch back to chat mode
     setBriefMode(false);
     setBriefText('');
     setParsedBrief(null);
     setParseState('input');
+    setAutoOrganize(false);
   };
   
   const handleCancel = () => {
@@ -134,6 +228,16 @@ export function BriefInput() {
         <Loader2 className="w-8 h-8 animate-spin text-primary" />
         <p className="text-sm text-muted-foreground">Parsing brief...</p>
         <p className="text-xs text-muted-foreground">Extracting areas and generating context</p>
+      </div>
+    );
+  }
+  
+  if (parseState === 'organizing') {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center gap-4 p-8">
+        <FolderTree className="w-8 h-8 animate-pulse text-primary" />
+        <p className="text-sm text-muted-foreground">Organizing into groups...</p>
+        <p className="text-xs text-muted-foreground">AI is proposing logical groupings</p>
       </div>
     );
   }
@@ -182,6 +286,125 @@ export function BriefInput() {
               </div>
             )}
             
+            {/* Detected Groups from Brief */}
+            {parsedBrief.hasGroupStructure && parsedBrief.detectedGroups && parsedBrief.detectedGroups.length > 0 && (
+              <div>
+                <h3 className="text-sm font-medium mb-2 flex items-center gap-2">
+                  <Layers className="w-4 h-4 text-blue-500" />
+                  Detected Groups ({parsedBrief.detectedGroups.length})
+                </h3>
+                <div className="space-y-2">
+                  {parsedBrief.detectedGroups.map((group, i) => (
+                    <div 
+                      key={i} 
+                      className="text-xs p-2 rounded border border-border bg-muted/30"
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <div 
+                          className="w-3 h-3 rounded-full" 
+                          style={{ backgroundColor: group.color }}
+                        />
+                        <span className="font-medium">{group.name}</span>
+                        <Badge variant="secondary" className="text-xs ml-auto">
+                          {group.areaNames.length} areas
+                        </Badge>
+                      </div>
+                      <p className="text-muted-foreground truncate">
+                        {group.areaNames.slice(0, 4).join(', ')}
+                        {group.areaNames.length > 4 && ` +${group.areaNames.length - 4} more`}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-muted-foreground mt-2 italic">
+                  ✓ Groups will be created automatically from brief structure
+                </p>
+              </div>
+            )}
+            
+            {/* Area Totals Validation */}
+            {(parsedBrief.briefTotal || parsedBrief.parsedTotal || parsedBrief.groupTotals?.length) && (
+              <div>
+                <h3 className="text-sm font-medium mb-2 flex items-center gap-2">
+                  <Calculator className="w-4 h-4 text-blue-500" />
+                  Area Validation
+                </h3>
+                <div className="space-y-2 text-xs">
+                  {/* Program Total */}
+                  {(() => {
+                    const calculated = parsedBrief.parsedTotal ?? 
+                      parsedBrief.areas.reduce((sum, a) => sum + a.areaPerUnit * a.count, 0);
+                    const stated = parsedBrief.briefTotal;
+                    const diff = stated ? Math.abs(calculated - stated) : 0;
+                    const tolerance = stated ? stated * 0.02 : 0; // 2% tolerance
+                    const isMatch = !stated || diff <= tolerance;
+                    
+                    return (
+                      <div className={`p-2 rounded border ${isMatch ? 'border-green-500/30 bg-green-500/10' : 'border-amber-500/30 bg-amber-500/10'}`}>
+                        <div className="flex items-center gap-2">
+                          {isMatch ? (
+                            <CheckCircle2 className="w-4 h-4 text-green-500" />
+                          ) : (
+                            <XCircle className="w-4 h-4 text-amber-500" />
+                          )}
+                          <span className="font-medium">Program Total</span>
+                        </div>
+                        <div className="mt-1 flex justify-between">
+                          <span className="text-muted-foreground">Parsed:</span>
+                          <span className="font-mono">{calculated.toLocaleString()} m²</span>
+                        </div>
+                        {stated && (
+                          <>
+                            <div className="flex justify-between">
+                              <span className="text-muted-foreground">Brief states:</span>
+                              <span className="font-mono">{stated.toLocaleString()} m²</span>
+                            </div>
+                            {!isMatch && (
+                              <div className="flex justify-between text-amber-600">
+                                <span>Difference:</span>
+                                <span className="font-mono">{diff > 0 ? '+' : ''}{(calculated - stated).toLocaleString()} m²</span>
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    );
+                  })()}
+                  
+                  {/* Group Totals */}
+                  {parsedBrief.groupTotals && parsedBrief.groupTotals.length > 0 && (
+                    <div className="space-y-1">
+                      <span className="text-muted-foreground">Group subtotals:</span>
+                      {parsedBrief.groupTotals.map((gt, i) => {
+                        const diff = Math.abs(gt.parsedTotal - gt.statedTotal);
+                        const tolerance = gt.statedTotal * 0.02;
+                        const isMatch = diff <= tolerance;
+                        
+                        return (
+                          <div key={i} className="flex items-center justify-between pl-2">
+                            <span className="truncate flex-1">{gt.groupName}</span>
+                            <div className="flex items-center gap-2">
+                              {isMatch ? (
+                                <CheckCircle2 className="w-3 h-3 text-green-500" />
+                              ) : (
+                                <XCircle className="w-3 h-3 text-amber-500" />
+                              )}
+                              <span className="font-mono text-xs">
+                                {gt.parsedTotal.toLocaleString()}
+                                {!isMatch && (
+                                  <span className="text-amber-500"> (brief: {gt.statedTotal.toLocaleString()})</span>
+                                )}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+            
             {/* Ambiguities */}
             {parsedBrief.ambiguities && parsedBrief.ambiguities.length > 0 && (
               <div>
@@ -209,15 +432,31 @@ export function BriefInput() {
           </div>
         </ScrollArea>
         
-        <div className="p-4 flex gap-2 border-t border-border flex-shrink-0">
-          <Button variant="outline" onClick={handleCancel} className="flex-1">
-            <X className="w-4 h-4 mr-1" />
-            Cancel
-          </Button>
-          <Button onClick={handleApply} className="flex-1">
-            <Plus className="w-4 h-4 mr-1" />
-            Create {selectedAreas.size + selectedSuggested.size} Areas
-          </Button>
+        <div className="p-4 border-t border-border flex-shrink-0 space-y-3">
+          <label className="flex items-center gap-2 text-sm cursor-pointer hover:bg-muted/50 p-2 rounded -mx-2">
+            <input
+              type="checkbox"
+              checked={autoOrganize}
+              onChange={(e) => setAutoOrganize(e.target.checked)}
+              className="w-4 h-4 rounded border-2 border-primary accent-primary"
+            />
+            <FolderTree className="w-4 h-4 text-primary" />
+            <span>
+              {parsedBrief.hasGroupStructure && parsedBrief.detectedGroups?.length
+                ? 'Apply groups from brief'
+                : 'Auto-organize into groups (AI)'}
+            </span>
+          </label>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={handleCancel} className="flex-1">
+              <X className="w-4 h-4 mr-1" />
+              Cancel
+            </Button>
+            <Button onClick={handleApply} className="flex-1">
+              <Plus className="w-4 h-4 mr-1" />
+              Create {selectedAreas.size + selectedSuggested.size} Areas
+            </Button>
+          </div>
         </div>
       </div>
     );

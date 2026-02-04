@@ -52,4 +52,5 @@ export type ActionType =
   | 'ai-merge'
   | 'ai-update'
   | 'ai-create-groups'
-  | 'ai-assign';
+  | 'ai-assign'
+  | 'ai-add-notes';

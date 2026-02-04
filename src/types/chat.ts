@@ -1,6 +1,24 @@
 import type { UUID } from './project';
 
 // ============================================
+// CHAT MODES & AI ROLES
+// ============================================
+
+// Agent mode: AI takes actions, proposes changes
+// Consultation mode: AI answers questions, provides reasoning
+export type ChatMode = 'agent' | 'consultation';
+
+// AI can respond from different professional perspectives
+export type AIRole = 
+  | 'architect'
+  | 'urban-architect'
+  | 'landscape-architect'
+  | 'interior-architect';
+
+// Context level controls how much data is sent to AI
+export type ContextLevel = 'minimal' | 'standard' | 'full';
+
+// ============================================
 // MESSAGE TYPES
 // ============================================
 
@@ -117,13 +135,27 @@ export interface AssignToGroupProposal {
   status: ProposalStatus;
 }
 
+export interface AddNotesProposal {
+  id: UUID;
+  type: 'add_notes';
+  notes: Array<{
+    targetType: 'area' | 'group';
+    targetId: UUID;
+    targetName: string;
+    content: string;
+    reason?: string;
+  }>;
+  status: ProposalStatus;
+}
+
 export type Proposal =
   | CreateAreasProposal
   | SplitAreaProposal
   | MergeAreasProposal
   | UpdateAreasProposal
   | CreateGroupsProposal
-  | AssignToGroupProposal;
+  | AssignToGroupProposal
+  | AddNotesProposal;
 
 export type ProposalStatus = 'pending' | 'accepted' | 'rejected' | 'modified';
 export type ProposalType = Proposal['type'];
@@ -149,10 +181,28 @@ export interface ParsedBriefArea {
   count: number;
   briefNote?: string;
   aiNote?: string;
+  groupHint?: string;
+}
+
+export interface DetectedGroup {
+  name: string;
+  color: string;
+  areaNames: string[];
+}
+
+export interface GroupTotal {
+  groupName: string;
+  statedTotal: number;
+  parsedTotal: number;
 }
 
 export interface ParsedBrief {
   areas: ParsedBriefArea[];
+  detectedGroups?: DetectedGroup[];
+  hasGroupStructure?: boolean;
+  briefTotal?: number | null;
+  parsedTotal?: number;
+  groupTotals?: GroupTotal[];
   projectContext: string;
   suggestedAreas?: ParsedBriefArea[];
   ambiguities?: string[];

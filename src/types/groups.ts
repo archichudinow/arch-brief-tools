@@ -1,4 +1,5 @@
 import type { UUID, Timestamp } from './project';
+import type { Note } from './notes';
 
 // ============================================
 // GROUP
@@ -10,9 +11,11 @@ export interface Group {
   color: string; // hex color for UI
   // Members are AreaNode IDs
   members: UUID[];
-  // Notes
-  aiNote: string | null;
-  userNote: string | null;
+  // Notes - array of typed note cards
+  notes: Note[];
+  // Legacy notes (for migration) - deprecated, use notes array
+  aiNote?: string | null;
+  userNote?: string | null;
   // Board position (for 2D canvas)
   boardPosition?: {
     x: number;

@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { useChatStore, useProjectStore, useHistoryStore } from '@/stores';
 import type { Proposal } from '@/types';
-import { Check, X, Scissors, GitMerge, Plus, Pencil, FolderPlus, FolderInput } from 'lucide-react';
+import { Check, X, Scissors, GitMerge, Plus, Pencil, FolderPlus, FolderInput, StickyNote } from 'lucide-react';
 
 interface ProposalCardProps {
   proposal: Proposal;
@@ -19,6 +19,8 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
   const deleteNode = useProjectStore((s) => s.deleteNode);
   const createGroup = useProjectStore((s) => s.createGroup);
   const assignToGroup = useProjectStore((s) => s.assignToGroup);
+  const addNoteToArea = useProjectStore((s) => s.addNoteToArea);
+  const addNoteToGroup = useProjectStore((s) => s.addNoteToGroup);
   const nodes = useProjectStore((s) => s.nodes);
   const groups = useProjectStore((s) => s.groups);
   
@@ -116,6 +118,25 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
         snapshot('ai-assign', `AI: Assign to ${accepted.groupName}`, { nodes, groups });
         assignToGroup(accepted.groupId, accepted.nodeIds);
         break;
+        
+      case 'add_notes':
+        snapshot('ai-add-notes', `AI: Add ${accepted.notes.length} notes`, { nodes, groups });
+        accepted.notes.forEach((note) => {
+          if (note.targetType === 'area') {
+            addNoteToArea(note.targetId, {
+              source: 'ai',
+              content: note.content,
+              reason: note.reason,
+            });
+          } else {
+            addNoteToGroup(note.targetId, {
+              source: 'ai',
+              content: note.content,
+              reason: note.reason,
+            });
+          }
+        });
+        break;
     }
   };
   
@@ -171,6 +192,7 @@ function ProposalIcon({ type }: { type: Proposal['type'] }) {
     update_areas: Pencil,
     create_groups: FolderPlus,
     assign_to_group: FolderInput,
+    add_notes: StickyNote,
   };
   const Icon = icons[type];
   if (!Icon) return null;
@@ -191,6 +213,8 @@ function ProposalTitle({ proposal }: { proposal: Proposal }) {
       return <span>Create {proposal.groups?.length || 0} group{(proposal.groups?.length || 0) > 1 ? 's' : ''}</span>;
     case 'assign_to_group':
       return <span>Assign {proposal.nodeNames?.length || 0} areas to "{proposal.groupName || 'group'}"</span>;
+    case 'add_notes':
+      return <span>Add {proposal.notes?.length || 0} note{(proposal.notes?.length || 0) > 1 ? 's' : ''}</span>;
     default:
       return <span>Proposal</span>;
   }
@@ -263,6 +287,18 @@ function ProposalDetails({ proposal }: { proposal: Proposal }) {
         <p className="text-xs text-muted-foreground">
           Areas: {proposal.nodeNames?.join(', ') || 'None'}
         </p>
+      );
+      
+    case 'add_notes':
+      if (!proposal.notes?.length) return null;
+      return (
+        <ul className="text-xs text-muted-foreground space-y-1">
+          {proposal.notes.map((note, i) => (
+            <li key={i}>
+              • {note.targetName}: "{note.content.slice(0, 50)}{note.content.length > 50 ? '...' : ''}"
+            </li>
+          ))}
+        </ul>
       );
       
     default:

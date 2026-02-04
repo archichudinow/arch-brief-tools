@@ -75,6 +75,12 @@ interface ProjectState {
   assignToGroup: (groupId: UUID, nodeIds: UUID[]) => void;
   removeFromGroup: (groupId: UUID, nodeIds: UUID[]) => void;
   
+  // Actions - Notes
+  addNoteToArea: (areaId: UUID, note: { source: 'brief' | 'ai' | 'user'; content: string; reason?: string }) => UUID | null;
+  addNoteToGroup: (groupId: UUID, note: { source: 'brief' | 'ai' | 'user'; content: string; reason?: string }) => UUID | null;
+  updateNote: (targetType: 'area' | 'group', targetId: UUID, noteId: UUID, content: string) => void;
+  deleteNote: (targetType: 'area' | 'group', targetId: UUID, noteId: UUID) => void;
+  
   // Actions - Board Layout
   setGroupPosition: (groupId: string, x: number, y: number) => void;
   setGroupSizeOverride: (groupId: string, size: { width?: number; height?: number }) => void;
@@ -174,8 +180,7 @@ export const useProjectStore = create<ProjectState>()(
           name: input.name,
           areaPerUnit: input.areaPerUnit,
           count: input.count,
-          aiNote: null,
-          userNote: input.userNote ?? null,
+          notes: [], // New notes array
           lockedFields: [],
           createdAt: timestamp,
           modifiedAt: timestamp,
@@ -305,8 +310,7 @@ export const useProjectStore = create<ProjectState>()(
             name: `${node.name} (${i + 1})`,
             areaPerUnit: node.areaPerUnit,
             count: quantities[i],
-            aiNote: null,
-            userNote: null,
+            notes: [],
             lockedFields: [],
             createdAt: timestamp,
             modifiedAt: timestamp,
@@ -360,8 +364,7 @@ export const useProjectStore = create<ProjectState>()(
             name: `${node.name} ${String.fromCharCode(65 + i)}`,
             areaPerUnit: i === parts - 1 ? areaEachRounded + diff : areaEachRounded,
             count: 1,
-            aiNote: null,
-            userNote: null,
+            notes: [],
             lockedFields: [],
             createdAt: timestamp,
             modifiedAt: timestamp,
@@ -414,8 +417,7 @@ export const useProjectStore = create<ProjectState>()(
             name: split.name,
             areaPerUnit: split.area,
             count: 1,
-            aiNote: null,
-            userNote: null,
+            notes: [],
             lockedFields: [],
             createdAt: timestamp,
             modifiedAt: timestamp,
@@ -469,8 +471,7 @@ export const useProjectStore = create<ProjectState>()(
             name: split.name,
             areaPerUnit: Math.round(area),
             count: 1,
-            aiNote: null,
-            userNote: null,
+            notes: [],
             lockedFields: [],
             createdAt: timestamp,
             modifiedAt: timestamp,
@@ -546,9 +547,14 @@ export const useProjectStore = create<ProjectState>()(
           name: newName,
           areaPerUnit: avgAreaPerUnit,
           count: totalCount,
+          notes: [{
+            id: uuidv4(),
+            source: 'user',
+            content: `Merged from: ${nodesToMerge.map(n => n.name).join(', ')}`,
+            createdAt: timestamp,
+            modifiedAt: timestamp,
+          }],
           lockedFields: [],
-          aiNote: null,
-          userNote: `Merged from: ${nodesToMerge.map(n => n.name).join(', ')}`,
           createdAt: timestamp,
           modifiedAt: timestamp,
           createdBy: 'user',
@@ -590,8 +596,7 @@ export const useProjectStore = create<ProjectState>()(
           name: input.name,
           color: input.color ?? GROUP_COLORS[colorIndex],
           members: [],
-          aiNote: null,
-          userNote: null,
+          notes: [], // New notes array
           createdAt: timestamp,
           modifiedAt: timestamp,
         };
@@ -686,6 +691,96 @@ export const useProjectStore = create<ProjectState>()(
       useHistoryStore.getState().snapshot('remove_from_group', `Removed from "${group.name}"`, {
         nodes: state.nodes,
         groups: state.groups,
+      });
+    },
+
+    // ==========================================
+    // NOTE ACTIONS
+    // ==========================================
+
+    addNoteToArea: (areaId, note) => {
+      const area = get().nodes[areaId];
+      if (!area) return null;
+
+      const id = uuidv4();
+      const timestamp = now();
+
+      set((state) => {
+        const node = state.nodes[areaId];
+        if (!node) return;
+        if (!node.notes) node.notes = [];
+        node.notes.push({
+          id,
+          source: note.source,
+          content: note.content,
+          reason: note.reason,
+          createdAt: timestamp,
+          modifiedAt: timestamp,
+        });
+        node.modifiedAt = timestamp;
+        state.meta.modifiedAt = timestamp;
+      });
+
+      return id;
+    },
+
+    addNoteToGroup: (groupId, note) => {
+      const group = get().groups[groupId];
+      if (!group) return null;
+
+      const id = uuidv4();
+      const timestamp = now();
+
+      set((state) => {
+        const g = state.groups[groupId];
+        if (!g) return;
+        if (!g.notes) g.notes = [];
+        g.notes.push({
+          id,
+          source: note.source,
+          content: note.content,
+          reason: note.reason,
+          createdAt: timestamp,
+          modifiedAt: timestamp,
+        });
+        g.modifiedAt = timestamp;
+        state.meta.modifiedAt = timestamp;
+      });
+
+      return id;
+    },
+
+    updateNote: (targetType, targetId, noteId, content) => {
+      const timestamp = now();
+
+      set((state) => {
+        const target = targetType === 'area' 
+          ? state.nodes[targetId] 
+          : state.groups[targetId];
+        if (!target || !target.notes) return;
+
+        const note = target.notes.find(n => n.id === noteId);
+        if (note) {
+          note.content = content;
+          note.modifiedAt = timestamp;
+        }
+        target.modifiedAt = timestamp;
+        state.meta.modifiedAt = timestamp;
+      });
+    },
+
+    deleteNote: (targetType, targetId, noteId) => {
+      const timestamp = now();
+
+      set((state) => {
+        const target = targetType === 'area' 
+          ? state.nodes[targetId] 
+          : state.groups[targetId];
+        if (!target || !target.notes) return;
+
+        target.notes = target.notes.filter(n => n.id !== noteId);
+        target.modifiedAt = timestamp;
+        state.meta.modifiedAt = timestamp;
       });
     },
 

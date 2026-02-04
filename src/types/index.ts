@@ -2,5 +2,6 @@
 export * from './project';
 export * from './areas';
 export * from './groups';
+export * from './notes';
 export * from './history';
 export * from './chat';

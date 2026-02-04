@@ -1,4 +1,5 @@
 import type { UUID, Timestamp } from './project';
+import type { Note } from './notes';
 
 // ============================================
 // AREA NODE
@@ -9,9 +10,11 @@ export interface AreaNode {
   name: string;
   areaPerUnit: number; // square meters
   count: number;
-  // Notes
-  aiNote: string | null;
-  userNote: string | null;
+  // Notes - array of typed note cards
+  notes: Note[];
+  // Legacy notes (for migration) - deprecated, use notes array
+  aiNote?: string | null;
+  userNote?: string | null;
   // Locks
   lockedFields: AreaNodeField[];
   // Metadata

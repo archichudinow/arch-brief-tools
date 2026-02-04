@@ -1,11 +1,11 @@
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
+import { Card, CardContent } from '@/components/ui/card';
 import { useChatStore, useUIStore, useProjectStore } from '@/stores';
-import { sendChatMessage, buildChatRequest, addIdsToProposals } from '@/services';
+import { sendChatMessage, buildChatRequest, addIdsToProposals, enhancePrompt, type EnhancedPrompt } from '@/services';
 import { MessageBubble } from './MessageBubble';
 import { BriefInput } from './BriefInput';
 import { 
@@ -14,7 +14,12 @@ import {
   Trash2, 
   FileText, 
   MessageSquare,
-  Sparkles 
+  Sparkles,
+  Bot,
+  HelpCircle,
+  Wand2,
+  X,
+  Play
 } from 'lucide-react';
 
 export function ChatPanel() {
@@ -31,6 +36,9 @@ export function ChatPanel() {
   const briefMode = useChatStore((s) => s.briefMode);
   const setBriefMode = useChatStore((s) => s.setBriefMode);
   const pendingProposals = useChatStore((s) => s.pendingProposals);
+  const chatMode = useChatStore((s) => s.chatMode);
+  const setChatMode = useChatStore((s) => s.setChatMode);
+  const aiRole = useChatStore((s) => s.aiRole);
   
   const selectedNodeIds = useUIStore((s) => s.selectedNodeIds);
   const selectedGroupIds = useUIStore((s) => s.selectedGroupIds);
@@ -40,6 +48,10 @@ export function ChatPanel() {
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  
+  // Enhanced prompts state
+  const [enhancedPrompts, setEnhancedPrompts] = useState<EnhancedPrompt[]>([]);
+  const [isEnhancing, setIsEnhancing] = useState(false);
   
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -69,23 +81,24 @@ export function ChatPanel() {
     setLoading(true);
     
     try {
-      // Build request - if nothing selected, all areas are included
+      // Build request with chat mode configuration
       const request = buildChatRequest(
         content,
         projectContext,
         selectedNodes,
         selectedGroups,
         nodes,
-        groups
+        groups,
+        { mode: chatMode, role: aiRole ?? undefined }
       );
       
-      // Send to AI - returns already-parsed AIResponse
-      const response = await sendChatMessage(request);
+      // Send to AI with mode
+      const response = await sendChatMessage(request, chatMode);
       
       console.log('Chat response:', response);
       console.log('Proposals from response:', response.proposals);
       
-      // Add proposals with IDs
+      // Add proposals with IDs (only in agent mode)
       const proposals = response.proposals
         ? addIdsToProposals(response.proposals)
         : undefined;
@@ -95,12 +108,6 @@ export function ChatPanel() {
       addAIMessage(response.message, proposals);
       console.log('AI message added with proposals');
       
-      if (response.assumptions && response.assumptions.length > 0) {
-        addSystemMessage(
-          `Assumptions: ${response.assumptions.join(', ')}`,
-          'info'
-        );
-      }
     } catch (error) {
       console.error('Chat error:', error);
       addSystemMessage('Failed to get response. Please try again.', 'error');
@@ -114,6 +121,78 @@ export function ChatPanel() {
       e.preventDefault();
       handleSend();
     }
+  };
+  
+  const handleEnhance = async () => {
+    if (!inputValue.trim() || isEnhancing || isLoading) return;
+    
+    setIsEnhancing(true);
+    
+    try {
+      const selectedNodes = selectedNodeIds.map((id) => nodes[id]).filter(Boolean);
+      const selectedGroups = selectedGroupIds.map((id) => groups[id]).filter(Boolean);
+      
+      const options = await enhancePrompt(
+        inputValue,
+        selectedNodes,
+        selectedGroups,
+        nodes,
+        groups
+      );
+      
+      setEnhancedPrompts(options);
+    } catch (error) {
+      console.error('Enhance error:', error);
+      addSystemMessage('Failed to enhance prompt. Try sending directly.', 'warning');
+    } finally {
+      setIsEnhancing(false);
+    }
+  };
+  
+  const handleSelectEnhanced = async (option: EnhancedPrompt) => {
+    // Clear enhanced options
+    setEnhancedPrompts([]);
+    
+    // Update input with selected prompt and send
+    setInputValue(option.prompt);
+    
+    // Get selected items
+    const selectedNodes = selectedNodeIds.map((id) => nodes[id]).filter(Boolean);
+    const selectedGroups = selectedGroupIds.map((id) => groups[id]).filter(Boolean);
+    
+    // Add user message
+    addUserMessage(option.prompt, selectedNodeIds, selectedGroupIds);
+    setLoading(true);
+    
+    try {
+      const request = buildChatRequest(
+        option.prompt,
+        projectContext,
+        selectedNodes,
+        selectedGroups,
+        nodes,
+        groups,
+        { mode: chatMode, role: aiRole ?? undefined }
+      );
+      
+      const response = await sendChatMessage(request, chatMode);
+      
+      const proposals = response.proposals
+        ? addIdsToProposals(response.proposals)
+        : undefined;
+      
+      addAIMessage(response.message, proposals);
+    } catch (error) {
+      console.error('Chat error:', error);
+      addSystemMessage('Failed to get response. Please try again.', 'error');
+    } finally {
+      setLoading(false);
+      setInputValue('');
+    }
+  };
+  
+  const handleCancelEnhance = () => {
+    setEnhancedPrompts([]);
   };
   
   return (
@@ -130,6 +209,16 @@ export function ChatPanel() {
           )}
         </div>
         <div className="flex items-center gap-1">
+          {/* Chat Mode Toggle */}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setChatMode(chatMode === 'agent' ? 'consultation' : 'agent')}
+            className={chatMode === 'consultation' ? 'bg-muted' : ''}
+            title={chatMode === 'agent' ? 'Agent Mode (actions)' : 'Consultation Mode (Q&A)'}
+          >
+            {chatMode === 'agent' ? <Bot className="w-4 h-4" /> : <HelpCircle className="w-4 h-4" />}
+          </Button>
           <Button
             variant="ghost"
             size="icon"
@@ -144,6 +233,19 @@ export function ChatPanel() {
           </Button>
         </div>
       </div>
+      
+      {/* Mode indicator */}
+      {!briefMode && (
+        <div className="px-4 py-1 bg-muted/30 text-xs border-b border-border flex items-center gap-2">
+          <span className="text-muted-foreground">Mode:</span>
+          <Badge variant={chatMode === 'agent' ? 'default' : 'secondary'} className="text-xs">
+            {chatMode === 'agent' ? 'Agent' : 'Consultation'}
+          </Badge>
+          <span className="text-muted-foreground text-xs">
+            {chatMode === 'agent' ? '(proposes actions)' : '(answers questions)'}
+          </span>
+        </div>
+      )}
       
       {briefMode ? (
         <BriefInput />
@@ -194,7 +296,7 @@ export function ChatPanel() {
                     Ask questions about your areas,<br />
                     request splits, merges, or analysis
                   </p>
-                  <Separator className="my-4 w-32" />
+                  <div className="my-4 w-32 h-px bg-border" />
                   <p className="text-xs">
                     Or switch to <strong>Brief Mode</strong><br />
                     to parse a project brief
@@ -218,6 +320,45 @@ export function ChatPanel() {
           
           {/* Input */}
           <div className="p-4 border-t border-border flex-shrink-0">
+            {/* Enhanced Prompts Options */}
+            {enhancedPrompts.length > 0 && (
+              <div className="mb-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                    <Wand2 className="w-3 h-3" />
+                    Choose an option:
+                  </span>
+                  <Button variant="ghost" size="icon" className="h-6 w-6" onClick={handleCancelEnhance}>
+                    <X className="w-3 h-3" />
+                  </Button>
+                </div>
+                {enhancedPrompts.map((option, i) => (
+                  <Card 
+                    key={i} 
+                    className="cursor-pointer hover:bg-muted/50 transition-colors"
+                    onClick={() => handleSelectEnhanced(option)}
+                  >
+                    <CardContent className="p-3">
+                      <div className="flex items-start gap-2">
+                        <Play className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium text-sm">{option.title}</p>
+                          <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{option.prompt}</p>
+                          <div className="flex flex-wrap gap-1 mt-2">
+                            {option.operations.slice(0, 3).map((op, j) => (
+                              <Badge key={j} variant="secondary" className="text-xs">
+                                {op}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+            
             <div className="flex gap-2">
               <Textarea
                 ref={inputRef}
@@ -226,27 +367,47 @@ export function ChatPanel() {
                 onKeyDown={handleKeyDown}
                 placeholder="Ask about areas, request changes..."
                 className="min-h-[80px] max-h-[120px] resize-none"
-                disabled={isLoading}
+                disabled={isLoading || isEnhancing}
               />
             </div>
             <div className="flex justify-between items-center mt-2">
               <p className="text-xs text-muted-foreground">
                 Shift+Enter for new line
               </p>
-              <Button 
-                onClick={handleSend} 
-                disabled={!inputValue.trim() || isLoading}
-                size="sm"
-              >
-                {isLoading ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <>
-                    <Send className="w-4 h-4 mr-1" />
-                    Send
-                  </>
-                )}
-              </Button>
+              <div className="flex gap-2">
+                {/* Enhance Button */}
+                <Button 
+                  onClick={handleEnhance} 
+                  disabled={!inputValue.trim() || isLoading || isEnhancing}
+                  size="sm"
+                  variant="outline"
+                  title="Suggest refined prompts"
+                >
+                  {isEnhancing ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <>
+                      <Wand2 className="w-4 h-4 mr-1" />
+                      Enhance
+                    </>
+                  )}
+                </Button>
+                {/* Send Button */}
+                <Button 
+                  onClick={handleSend} 
+                  disabled={!inputValue.trim() || isLoading || isEnhancing}
+                  size="sm"
+                >
+                  {isLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <>
+                      <Send className="w-4 h-4 mr-1" />
+                      Send
+                    </>
+                  )}
+                </Button>
+              </div>
             </div>
           </div>
         </>

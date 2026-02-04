@@ -9,6 +9,8 @@ import type {
   SystemMessage,
   Proposal,
   ProposalStatus,
+  ChatMode,
+  AIRole,
 } from '@/types';
 
 // ============================================
@@ -25,6 +27,10 @@ interface ChatState {
   // Project context (generated from brief parsing)
   projectContext: string | null;
 
+  // Chat configuration
+  chatMode: ChatMode;
+  aiRole: AIRole | null;
+
   // UI State
   isOpen: boolean;
   isLoading: boolean;
@@ -39,6 +45,10 @@ interface ChatState {
   closeChat: () => void;
   toggleChat: () => void;
   setInputValue: (value: string) => void;
+
+  // Actions - Chat Config
+  setChatMode: (mode: ChatMode) => void;
+  setAIRole: (role: AIRole | null) => void;
 
   // Actions - Brief Mode
   setBriefMode: (mode: boolean) => void;
@@ -83,6 +93,8 @@ export const useChatStore = create<ChatState>()(
     messages: [],
     pendingProposals: [],
     projectContext: null,
+    chatMode: 'agent' as ChatMode,
+    aiRole: null,
     isOpen: false,
     isLoading: false,
     inputValue: '',
@@ -94,6 +106,10 @@ export const useChatStore = create<ChatState>()(
     closeChat: () => set((state) => { state.isOpen = false; }),
     toggleChat: () => set((state) => { state.isOpen = !state.isOpen; }),
     setInputValue: (value) => set((state) => { state.inputValue = value; }),
+
+    // Chat config actions
+    setChatMode: (mode) => set((state) => { state.chatMode = mode; }),
+    setAIRole: (role) => set((state) => { state.aiRole = role; }),
 
     // Brief mode
     setBriefMode: (mode) => set((state) => { state.briefMode = mode; }),
