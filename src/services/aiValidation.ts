@@ -81,6 +81,35 @@ const AddNotesProposalSchema = z.object({
   })),
 });
 
+// ============================================
+// GROUP OPERATION PROPOSALS
+// ============================================
+
+const SplitGroupEqualProposalSchema = z.object({
+  type: z.literal('split_group_equal'),
+  groupId: z.string().uuid(),
+  groupName: z.string(),
+  parts: z.number().int().min(2),
+  nameSuffix: z.string().optional(), // e.g. "Unit" → "Group - Unit 1", "Group - Unit 2"
+});
+
+const SplitGroupProportionProposalSchema = z.object({
+  type: z.literal('split_group_proportion'),
+  groupId: z.string().uuid(),
+  groupName: z.string(),
+  proportions: z.array(z.object({
+    name: z.string(),
+    percent: z.number().positive(),
+  })).min(2),
+});
+
+const MergeGroupAreasProposalSchema = z.object({
+  type: z.literal('merge_group_areas'),
+  groupId: z.string().uuid(),
+  groupName: z.string(),
+  newAreaName: z.string().optional(), // Defaults to group name
+});
+
 const ProposalSchema = z.discriminatedUnion('type', [
   CreateAreasProposalSchema,
   SplitAreaProposalSchema,
@@ -89,6 +118,9 @@ const ProposalSchema = z.discriminatedUnion('type', [
   CreateGroupsProposalSchema,
   AssignToGroupProposalSchema,
   AddNotesProposalSchema,
+  SplitGroupEqualProposalSchema,
+  SplitGroupProportionProposalSchema,
+  MergeGroupAreasProposalSchema,
 ]);
 
 // ============================================
@@ -122,6 +154,7 @@ const ExtractedRowSchema = z.object({
   lineType: z.enum(['item', 'subtotal', 'total', 'header', 'factor']),
   isOutdoor: z.boolean().default(false),
   areaType: z.enum(['net', 'gross', 'unknown']).default('unknown'),
+  comment: z.string().nullable().optional(),  // Brief notes/comments for this item
 });
 
 const BriefExtractionResultSchema = z.object({
@@ -257,6 +290,7 @@ export function validateProposal(proposal: unknown): ValidationResult<z.infer<ty
 const EnhancedPromptOptionSchema = z.object({
   title: z.string(),
   prompt: z.string(),
+  actionSummary: z.string(), // Human-readable action description with **highlighted** verbs
   operations: z.array(z.string()),
   affectedItems: z.array(z.string()),
 });

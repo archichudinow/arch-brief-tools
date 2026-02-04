@@ -39,6 +39,8 @@ export interface CreateAreaNodeInput {
   areaPerUnit: number;
   count: number;
   userNote?: string;
+  briefNote?: string;  // Note extracted from brief (comments/requirements)
+  aiNote?: string;     // Note from AI generation
 }
 
 export interface UpdateAreaNodeInput {

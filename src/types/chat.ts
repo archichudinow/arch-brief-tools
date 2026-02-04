@@ -148,6 +148,41 @@ export interface AddNotesProposal {
   status: ProposalStatus;
 }
 
+// ============================================
+// GROUP MANIPULATION PROPOSALS
+// ============================================
+
+export interface SplitGroupEqualProposal {
+  id: UUID;
+  type: 'split_group_equal';
+  groupId: UUID;
+  groupName: string;
+  parts: number;
+  nameSuffix?: string;
+  status: ProposalStatus;
+}
+
+export interface SplitGroupProportionProposal {
+  id: UUID;
+  type: 'split_group_proportion';
+  groupId: UUID;
+  groupName: string;
+  proportions: Array<{
+    name: string;
+    percent: number;
+  }>;
+  status: ProposalStatus;
+}
+
+export interface MergeGroupAreasProposal {
+  id: UUID;
+  type: 'merge_group_areas';
+  groupId: UUID;
+  groupName: string;
+  newAreaName?: string;
+  status: ProposalStatus;
+}
+
 export type Proposal =
   | CreateAreasProposal
   | SplitAreaProposal
@@ -155,7 +190,10 @@ export type Proposal =
   | UpdateAreasProposal
   | CreateGroupsProposal
   | AssignToGroupProposal
-  | AddNotesProposal;
+  | AddNotesProposal
+  | SplitGroupEqualProposal
+  | SplitGroupProportionProposal
+  | MergeGroupAreasProposal;
 
 export type ProposalStatus = 'pending' | 'accepted' | 'rejected' | 'modified';
 export type ProposalType = Proposal['type'];

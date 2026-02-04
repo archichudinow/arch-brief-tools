@@ -6,3 +6,4 @@ export { SplitDialog } from './SplitDialog';
 export { SplitEqualDialog } from './SplitEqualDialog';
 export { SplitByAreasDialog } from './SplitByAreasDialog';
 export { SplitByProportionDialog } from './SplitByProportionDialog';
+export { NotesCard } from './NotesCard';

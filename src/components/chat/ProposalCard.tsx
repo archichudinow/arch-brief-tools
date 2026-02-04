@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { useChatStore, useProjectStore, useHistoryStore } from '@/stores';
 import type { Proposal } from '@/types';
-import { Check, X, Scissors, GitMerge, Plus, Pencil, FolderPlus, FolderInput, StickyNote } from 'lucide-react';
+import { Check, X, Scissors, GitMerge, Plus, Pencil, FolderPlus, FolderInput, StickyNote, Copy, Percent, Combine } from 'lucide-react';
 
 interface ProposalCardProps {
   proposal: Proposal;
@@ -21,6 +21,9 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
   const assignToGroup = useProjectStore((s) => s.assignToGroup);
   const addNoteToArea = useProjectStore((s) => s.addNoteToArea);
   const addNoteToGroup = useProjectStore((s) => s.addNoteToGroup);
+  const splitGroupEqual = useProjectStore((s) => s.splitGroupEqual);
+  const splitGroupByProportion = useProjectStore((s) => s.splitGroupByProportion);
+  const mergeGroupAreas = useProjectStore((s) => s.mergeGroupAreas);
   const nodes = useProjectStore((s) => s.nodes);
   const groups = useProjectStore((s) => s.groups);
   
@@ -137,6 +140,21 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
           }
         });
         break;
+        
+      case 'split_group_equal':
+        snapshot('ai-split-group', `AI: Split ${accepted.groupName} into ${accepted.parts} parts`, { nodes, groups });
+        splitGroupEqual(accepted.groupId, accepted.parts, accepted.nameSuffix);
+        break;
+        
+      case 'split_group_proportion':
+        snapshot('ai-split-group-prop', `AI: Split ${accepted.groupName} by proportion`, { nodes, groups });
+        splitGroupByProportion(accepted.groupId, accepted.proportions);
+        break;
+        
+      case 'merge_group_areas':
+        snapshot('ai-merge-group', `AI: Merge areas in ${accepted.groupName}`, { nodes, groups });
+        mergeGroupAreas(accepted.groupId, accepted.newAreaName);
+        break;
     }
   };
   
@@ -193,6 +211,9 @@ function ProposalIcon({ type }: { type: Proposal['type'] }) {
     create_groups: FolderPlus,
     assign_to_group: FolderInput,
     add_notes: StickyNote,
+    split_group_equal: Copy,
+    split_group_proportion: Percent,
+    merge_group_areas: Combine,
   };
   const Icon = icons[type];
   if (!Icon) return null;
@@ -215,6 +236,12 @@ function ProposalTitle({ proposal }: { proposal: Proposal }) {
       return <span>Assign {proposal.nodeNames?.length || 0} areas to "{proposal.groupName || 'group'}"</span>;
     case 'add_notes':
       return <span>Add {proposal.notes?.length || 0} note{(proposal.notes?.length || 0) > 1 ? 's' : ''}</span>;
+    case 'split_group_equal':
+      return <span>Split "{proposal.groupName || 'group'}" into {proposal.parts || 0} equal parts</span>;
+    case 'split_group_proportion':
+      return <span>Split "{proposal.groupName || 'group'}" by proportion</span>;
+    case 'merge_group_areas':
+      return <span>Merge all areas in "{proposal.groupName || 'group'}"</span>;
     default:
       return <span>Proposal</span>;
   }
@@ -299,6 +326,30 @@ function ProposalDetails({ proposal }: { proposal: Proposal }) {
             </li>
           ))}
         </ul>
+      );
+      
+    case 'split_group_equal':
+      return (
+        <p className="text-xs text-muted-foreground">
+          Duplicate group structure {proposal.parts} times, dividing area counts equally
+        </p>
+      );
+      
+    case 'split_group_proportion':
+      if (!proposal.proportions?.length) return null;
+      return (
+        <ul className="text-xs text-muted-foreground space-y-1">
+          {proposal.proportions.map((prop, i) => (
+            <li key={i}>• {prop.name}: {prop.percent}%</li>
+          ))}
+        </ul>
+      );
+      
+    case 'merge_group_areas':
+      return (
+        <p className="text-xs text-muted-foreground">
+          Combine all areas into: "{proposal.newAreaName || proposal.groupName}"
+        </p>
       );
       
     default:

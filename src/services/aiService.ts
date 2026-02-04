@@ -571,11 +571,13 @@ function buildParsedBrief(
     const row = extraction.rows[c.index];
     // Use parentSection if available, otherwise section
     const groupHint = row.parentSection || row.section || undefined;
+    // Use comment from extraction as briefNote (architectural context from the brief)
+    const briefNote = row.comment || undefined;
     return {
       name: row.text,
       areaPerUnit: row.value,
       count: row.multiplier || 1,
-      briefNote: `${row.text}: ${row.multiplier > 1 ? `${row.multiplier} × ` : ''}${row.value}m²`,
+      briefNote,
       groupHint,
     };
   });
@@ -1150,6 +1152,7 @@ async function attemptReconciliation(
 export interface EnhancedPrompt {
   title: string;
   prompt: string;
+  actionSummary: string; // Human-readable action description with **highlighted** verbs
   operations: string[];
   affectedItems: string[];
 }

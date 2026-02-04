@@ -154,6 +154,8 @@ export function BriefInput() {
         name: area.name,
         areaPerUnit: area.areaPerUnit,
         count: area.count,
+        briefNote: area.briefNote,  // Pass brief notes (comments from brief)
+        aiNote: area.aiNote,        // Pass AI notes (if generated)
       });
       if (id) createdNodeIds.push(id);
     });

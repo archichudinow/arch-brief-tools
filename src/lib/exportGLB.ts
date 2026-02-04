@@ -21,65 +21,8 @@ function areaToDimensions(areaSqM: number): { width: number; height: number } {
   return { width: side, height: side };
 }
 
-// Create a text plane with canvas texture (exports properly with GLB)
-function createTextPlane(
-  text: string,
-  fontSize: number,
-  color: string = '#000000',
-  bgColor: string | null = null
-): THREE.Mesh {
-  const canvas = document.createElement('canvas');
-  const context = canvas.getContext('2d')!;
-  
-  // High resolution for crisp text
-  const scale = 8;
-  const baseFontSize = fontSize * 100; // 0.4m = 40 units
-  const padding = 20;
-  
-  // Measure text first
-  context.font = `bold ${baseFontSize * scale}px Arial, sans-serif`;
-  const metrics = context.measureText(text);
-  
-  // Set canvas size based on text
-  canvas.width = Math.ceil(metrics.width + padding * 2 * scale);
-  canvas.height = Math.ceil(baseFontSize * scale * 1.5 + padding * 2 * scale);
-  
-  // Fill background if specified
-  if (bgColor) {
-    context.fillStyle = bgColor;
-    context.fillRect(0, 0, canvas.width, canvas.height);
-  }
-  
-  // Draw text
-  context.font = `bold ${baseFontSize * scale}px Arial, sans-serif`;
-  context.fillStyle = color;
-  context.textBaseline = 'middle';
-  context.textAlign = 'left';
-  context.fillText(text, padding * scale, canvas.height / 2);
-  
-  // Create texture from canvas
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.needsUpdate = true;
-  texture.colorSpace = THREE.SRGBColorSpace;
-  
-  // Calculate plane dimensions in meters
-  const planeWidth = fontSize * (canvas.width / canvas.height) * 2;
-  const planeHeight = fontSize * 2;
-  
-  const geometry = new THREE.PlaneGeometry(planeWidth, planeHeight);
-  const material = new THREE.MeshBasicMaterial({
-    map: texture,
-    transparent: !bgColor,
-    side: THREE.DoubleSide,
-  });
-  
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.userData = { text, isLabel: true, width: planeWidth, height: planeHeight };
-  
-  return mesh;
-}
-
-// Create a 3D plane mesh for an area
+// Create a 2D rectangle outline for an area (line geometry, no mesh)
+// Rectangle is on XZ plane (horizontal floor)
 function createAreaMesh(
   area: AreaNode,
   color: string,
@@ -89,44 +32,36 @@ function createAreaMesh(
   areaGroup.name = `Area_${area.name.replace(/\s+/g, '_')}`;
   
   const dims = areaToDimensions(area.areaPerUnit * area.count);
+  const totalArea = area.areaPerUnit * area.count;
   
-  // Create the surface plane
-  const geometry = new THREE.PlaneGeometry(dims.width, dims.height);
-  const material = new THREE.MeshStandardMaterial({
+  // Create rectangle outline using line geometry (same as groups)
+  const halfW = dims.width / 2;
+  const halfD = dims.height / 2;
+  
+  const points = [
+    new THREE.Vector3(-halfW, 0, -halfD),
+    new THREE.Vector3(halfW, 0, -halfD),
+    new THREE.Vector3(halfW, 0, halfD),
+    new THREE.Vector3(-halfW, 0, halfD),
+    new THREE.Vector3(-halfW, 0, -halfD), // Close the rectangle
+  ];
+  
+  const geometry = new THREE.BufferGeometry().setFromPoints(points);
+  const material = new THREE.LineBasicMaterial({
     color: hexToThreeColor(color),
-    side: THREE.DoubleSide,
-    transparent: true,
-    opacity: 0.85,
-    roughness: 0.7,
-    metalness: 0.1,
+    linewidth: 2,
   });
   
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.name = area.name;
-  areaGroup.add(mesh);
-  
-  // Create text label (0.4m font size as specified)
-  const totalArea = area.areaPerUnit * area.count;
-  const labelText = `${area.name}`;
-  const areaText = `${totalArea.toFixed(1)}m²`;
-  
-  // Name label at lower-right corner
-  const nameLabel = createTextPlane(labelText, 0.4, '#ffffff');
-  nameLabel.position.set(
-    dims.width / 2 - nameLabel.userData.width / 2 - 0.15,
-    -dims.height / 2 + nameLabel.userData.height / 2 + 0.15,
-    0.02
-  );
-  areaGroup.add(nameLabel);
-  
-  // Area size above name
-  const sizeLabel = createTextPlane(areaText, 0.3, '#ffffff');
-  sizeLabel.position.set(
-    dims.width / 2 - sizeLabel.userData.width / 2 - 0.15,
-    -dims.height / 2 + sizeLabel.userData.height / 2 + 0.55,
-    0.02
-  );
-  areaGroup.add(sizeLabel);
+  const line = new THREE.Line(geometry, material);
+  line.name = area.name;
+  // Store metadata in userData for reference (not visible, but accessible)
+  line.userData = {
+    areaName: area.name,
+    totalArea: totalArea,
+    areaPerUnit: area.areaPerUnit,
+    count: area.count,
+  };
+  areaGroup.add(line);
   
   // Position the entire group
   areaGroup.position.set(position.x, position.y, position.z);
@@ -134,12 +69,12 @@ function createAreaMesh(
   return areaGroup;
 }
 
-// Create a group container (frame/folder rectangle)
+// Create a group container (2D rectangle outline, no text)
+// Layout is on XZ plane (horizontal floor)
 function createGroupContainer(
   groupData: Group,
   nodes: Record<string, AreaNode>,
-  groupPosition: { x: number; y: number },
-  areaOffsets: Record<string, { x: number; y: number }>
+  groupPosition: { x: number; z: number }
 ): THREE.Group {
   const group = new THREE.Group();
   group.name = `Group_${groupData.name.replace(/\s+/g, '_')}`;
@@ -155,120 +90,276 @@ function createGroupContainer(
     return group;
   }
   
-  // Layout areas within group
+  // Sort areas by size (largest first) for better packing
+  const sortedNodes = [...memberNodes].sort((a, b) => 
+    (b.areaPerUnit * b.count) - (a.areaPerUnit * a.count)
+  );
+  
+  // Layout areas within group using simple row-based packing
+  // No custom offsets - use calculated positions to avoid overlaps
+  const padding = 1; // 1 meter padding between areas
+  const maxRowWidth = 50; // Max row width before wrapping
+  
   let currentX = 0;
-  let currentY = 0;
-  let maxRowHeight = 0;
-  const rowWidth = 30;
-  const padding = 1;
+  let currentZ = 0;
+  let maxRowDepth = 0;
   
   const areaPositions: Array<{
     node: AreaNode;
     x: number;
-    y: number;
+    z: number;
     width: number;
-    height: number;
+    depth: number;
   }> = [];
   
-  memberNodes.forEach((node) => {
+  sortedNodes.forEach((node) => {
     const dims = areaToDimensions(node.areaPerUnit * node.count);
     
     // Check if we need to wrap to next row
-    if (currentX + dims.width > rowWidth && currentX > 0) {
+    if (currentX + dims.width > maxRowWidth && currentX > 0) {
       currentX = 0;
-      currentY -= maxRowHeight + padding;
-      maxRowHeight = 0;
+      currentZ += maxRowDepth + padding;
+      maxRowDepth = 0;
     }
-    
-    // Use custom offset if available
-    const offset = areaOffsets[node.id];
-    const x = offset ? offset.x / 50 : currentX; // Scale down from screen coords
-    const y = offset ? -offset.y / 50 : currentY;
     
     areaPositions.push({
       node,
-      x: offset ? x : currentX + dims.width / 2,
-      y: offset ? y : currentY - dims.height / 2,
+      x: currentX + dims.width / 2,
+      z: currentZ + dims.height / 2,
       width: dims.width,
-      height: dims.height,
+      depth: dims.height,
     });
     
-    if (!offset) {
-      currentX += dims.width + padding;
-      maxRowHeight = Math.max(maxRowHeight, dims.height);
-    }
+    currentX += dims.width + padding;
+    maxRowDepth = Math.max(maxRowDepth, dims.height);
   });
   
   // Calculate bounds
   let minX = Infinity, maxX = -Infinity;
-  let minY = Infinity, maxY = -Infinity;
+  let minZ = Infinity, maxZ = -Infinity;
   
   areaPositions.forEach((pos) => {
     minX = Math.min(minX, pos.x - pos.width / 2);
     maxX = Math.max(maxX, pos.x + pos.width / 2);
-    minY = Math.min(minY, pos.y - pos.height / 2);
-    maxY = Math.max(maxY, pos.y + pos.height / 2);
+    minZ = Math.min(minZ, pos.z - pos.depth / 2);
+    maxZ = Math.max(maxZ, pos.z + pos.depth / 2);
   });
   
   const boundsWidth = maxX - minX + padding * 2;
-  const boundsHeight = maxY - minY + padding * 2;
-  const centerX = (minX + maxX) / 2;
-  const centerY = (minY + maxY) / 2;
+  const boundsDepth = maxZ - minZ + padding * 2;
   
-  // Create group frame (outline)
-  const frameGeometry = new THREE.PlaneGeometry(boundsWidth, boundsHeight);
-  const frameMaterial = new THREE.MeshStandardMaterial({
+  // Create group frame as 2D rectangle outline on XZ plane (horizontal)
+  const framePoints = [
+    new THREE.Vector3(minX - padding, 0, minZ - padding),
+    new THREE.Vector3(maxX + padding, 0, minZ - padding),
+    new THREE.Vector3(maxX + padding, 0, maxZ + padding),
+    new THREE.Vector3(minX - padding, 0, maxZ + padding),
+    new THREE.Vector3(minX - padding, 0, minZ - padding), // Close the rectangle
+  ];
+  
+  const frameGeometry = new THREE.BufferGeometry().setFromPoints(framePoints);
+  const frameMaterial = new THREE.LineBasicMaterial({
     color: color,
-    side: THREE.DoubleSide,
-    transparent: true,
-    opacity: 0.15,
+    linewidth: 2,
   });
-  const frame = new THREE.Mesh(frameGeometry, frameMaterial);
-  frame.position.set(centerX, centerY, -0.01);
-  group.add(frame);
+  const frameLine = new THREE.Line(frameGeometry, frameMaterial);
+  frameLine.name = `${groupData.name}_outline`;
   
-  // Create frame border
-  const borderGeometry = new THREE.EdgesGeometry(frameGeometry);
-  const borderMaterial = new THREE.LineBasicMaterial({ color: color });
-  const border = new THREE.LineSegments(borderGeometry, borderMaterial);
-  border.position.set(centerX, centerY, -0.01);
-  group.add(border);
-  
-  // Add group label at top-left corner (colored with group color)
+  // Store group metadata in userData
   const groupTotalArea = memberNodes.reduce(
     (sum, n) => sum + n.areaPerUnit * n.count, 0
   );
-  const groupLabel = createTextPlane(
-    `${groupData.name} (${groupTotalArea.toFixed(1)}m²)`,
-    0.5,
-    '#ffffff',
-    groupData.color
-  );
-  groupLabel.position.set(
-    minX - padding + groupLabel.userData.width / 2 + 0.2,
-    maxY + padding + groupLabel.userData.height / 2 + 0.3,
-    0
-  );
-  group.add(groupLabel);
+  frameLine.userData = {
+    groupName: groupData.name,
+    totalArea: groupTotalArea,
+    memberCount: memberNodes.length,
+    color: groupData.color,
+    width: boundsWidth,
+    depth: boundsDepth,
+  };
+  group.add(frameLine);
   
-  // Add area surfaces
+  // Add area surfaces (2D shapes on floor)
   areaPositions.forEach((pos) => {
     const areaMesh = createAreaMesh(
       pos.node,
       groupData.color,
-      { x: pos.x, y: pos.y, z: 0 }
+      { x: pos.x, y: 0, z: pos.z } // On the floor
     );
     group.add(areaMesh);
   });
   
-  // Position entire group (convert from screen pixels to meters)
-  group.position.set(groupPosition.x / 50, -groupPosition.y / 50, 0);
+  // Position entire group on XZ plane
+  group.position.set(groupPosition.x, 0, groupPosition.z);
   
   return group;
 }
 
+// Create a single rectangle representing the summed area of a group
+function createGroupSummedRectangle(
+  groupData: Group,
+  nodes: Record<string, AreaNode>,
+  position: { x: number; z: number }
+): THREE.Group {
+  const group = new THREE.Group();
+  group.name = `GroupSum_${groupData.name.replace(/\s+/g, '_')}`;
+  
+  const color = hexToThreeColor(groupData.color);
+  
+  // Get member nodes and calculate total area
+  const memberNodes = groupData.members
+    .map((id) => nodes[id])
+    .filter(Boolean);
+  
+  if (memberNodes.length === 0) {
+    return group;
+  }
+  
+  const totalArea = memberNodes.reduce(
+    (sum, n) => sum + n.areaPerUnit * n.count, 0
+  );
+  
+  // Create a single rectangle with the total area
+  const dims = areaToDimensions(totalArea);
+  const halfW = dims.width / 2;
+  const halfD = dims.height / 2;
+  
+  const points = [
+    new THREE.Vector3(-halfW, 0, -halfD),
+    new THREE.Vector3(halfW, 0, -halfD),
+    new THREE.Vector3(halfW, 0, halfD),
+    new THREE.Vector3(-halfW, 0, halfD),
+    new THREE.Vector3(-halfW, 0, -halfD),
+  ];
+  
+  const geometry = new THREE.BufferGeometry().setFromPoints(points);
+  const material = new THREE.LineBasicMaterial({
+    color: color,
+    linewidth: 2,
+  });
+  
+  const line = new THREE.Line(geometry, material);
+  line.name = `${groupData.name}_summed`;
+  line.userData = {
+    groupName: groupData.name,
+    totalArea: totalArea,
+    memberCount: memberNodes.length,
+    isSummed: true,
+    width: dims.width,
+    depth: dims.height,
+  };
+  group.add(line);
+  
+  group.position.set(position.x + halfW, 0, position.z + halfD);
+  
+  return group;
+}
+
+// Create a rectangle for the entire project program
+function createProjectRectangle(
+  projectName: string,
+  width: number,
+  depth: number,
+  position: { x: number; z: number }
+): THREE.Group {
+  const group = new THREE.Group();
+  group.name = `Project_${projectName.replace(/\s+/g, '_')}`;
+  
+  const halfW = width / 2;
+  const halfD = depth / 2;
+  
+  const points = [
+    new THREE.Vector3(-halfW, 0, -halfD),
+    new THREE.Vector3(halfW, 0, -halfD),
+    new THREE.Vector3(halfW, 0, halfD),
+    new THREE.Vector3(-halfW, 0, halfD),
+    new THREE.Vector3(-halfW, 0, -halfD),
+  ];
+  
+  const geometry = new THREE.BufferGeometry().setFromPoints(points);
+  const material = new THREE.LineBasicMaterial({
+    color: 0x333333, // Dark gray for project outline
+    linewidth: 3,
+  });
+  
+  const line = new THREE.Line(geometry, material);
+  line.name = 'ProjectProgram';
+  line.userData = {
+    projectName: projectName,
+    totalArea: width * depth,
+    isProjectProgram: true,
+    width: width,
+    depth: depth,
+  };
+  group.add(line);
+  
+  group.position.set(position.x + halfW, 0, position.z + halfD);
+  
+  return group;
+}
+
+// Create a fixed-height rectangle (20m deep, length calculated from area, extends to the right)
+function createFixedWidthRectangle(
+  groupData: Group,
+  nodes: Record<string, AreaNode>,
+  fixedDepth: number,
+  position: { x: number; z: number }
+): { group: THREE.Group; length: number; depth: number } {
+  const group = new THREE.Group();
+  group.name = `GroupStrip_${groupData.name.replace(/\s+/g, '_')}`;
+  
+  const color = hexToThreeColor(groupData.color);
+  
+  const memberNodes = groupData.members
+    .map((id) => nodes[id])
+    .filter(Boolean);
+  
+  if (memberNodes.length === 0) {
+    return { group, length: 0, depth: fixedDepth };
+  }
+  
+  const totalArea = memberNodes.reduce(
+    (sum, n) => sum + n.areaPerUnit * n.count, 0
+  );
+  
+  // Calculate length to match area: area = depth * length
+  // Length extends along X axis (to the right)
+  const length = totalArea / fixedDepth;
+  
+  // Rectangle: starts at left edge (x=0), extends right
+  // Depth is fixed along Z axis
+  const points = [
+    new THREE.Vector3(0, 0, 0),
+    new THREE.Vector3(length, 0, 0),
+    new THREE.Vector3(length, 0, fixedDepth),
+    new THREE.Vector3(0, 0, fixedDepth),
+    new THREE.Vector3(0, 0, 0),
+  ];
+  
+  const geometry = new THREE.BufferGeometry().setFromPoints(points);
+  const material = new THREE.LineBasicMaterial({
+    color: color,
+    linewidth: 2,
+  });
+  
+  const line = new THREE.Line(geometry, material);
+  line.name = `${groupData.name}_strip`;
+  line.userData = {
+    groupName: groupData.name,
+    totalArea: totalArea,
+    fixedDepth: fixedDepth,
+    calculatedLength: length,
+    isStrip: true,
+  };
+  group.add(line);
+  
+  group.position.set(position.x, 0, position.z);
+  
+  return { group, length, depth: fixedDepth };
+}
+
 export async function exportToGLB(data: ExportGLBData): Promise<void> {
-  const { projectName, nodes, groups, boardLayout } = data;
+  const { projectName, nodes, groups } = data;
   
   // Create scene
   const scene = new THREE.Scene();
@@ -284,7 +375,7 @@ export async function exportToGLB(data: ExportGLBData): Promise<void> {
   scene.add(ambientLight);
   
   const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6);
-  directionalLight.position.set(10, 10, 10);
+  directionalLight.position.set(10, 20, 10);
   scene.add(directionalLight);
   
   // Track which nodes are in groups
@@ -292,53 +383,58 @@ export async function exportToGLB(data: ExportGLBData): Promise<void> {
   
   // Calculate group bounds for proper offsetting
   const groupsArray = Object.values(groups);
-  const groupBounds: Array<{ width: number; height: number }> = [];
+  const groupBounds: Array<{ width: number; depth: number }> = [];
   
-  // Pre-calculate each group's bounds
+  // Pre-calculate each group's bounds (sorting areas by size for better packing)
   groupsArray.forEach((groupData) => {
     const memberNodes = groupData.members
       .map((id) => nodes[id])
       .filter(Boolean);
     
     if (memberNodes.length === 0) {
-      groupBounds.push({ width: 5, height: 5 });
+      groupBounds.push({ width: 5, depth: 5 });
       return;
     }
     
-    // Calculate approximate bounds
-    let totalWidth = 0;
-    let maxHeight = 0;
-    const padding = 1;
-    const rowWidth = 30;
-    let currentRowWidth = 0;
-    let rows = 1;
+    // Sort by size for better packing
+    const sortedNodes = [...memberNodes].sort((a, b) => 
+      (b.areaPerUnit * b.count) - (a.areaPerUnit * a.count)
+    );
     
-    memberNodes.forEach((node) => {
+    // Calculate bounds with row-based packing
+    const padding = 1;
+    const maxRowWidth = 50;
+    let currentX = 0;
+    let currentZ = 0;
+    let maxRowDepth = 0;
+    let totalWidth = 0;
+    
+    sortedNodes.forEach((node) => {
       const dims = areaToDimensions(node.areaPerUnit * node.count);
-      if (currentRowWidth + dims.width > rowWidth && currentRowWidth > 0) {
-        currentRowWidth = dims.width + padding;
-        rows++;
-      } else {
-        currentRowWidth += dims.width + padding;
+      if (currentX + dims.width > maxRowWidth && currentX > 0) {
+        currentX = 0;
+        currentZ += maxRowDepth + padding;
+        maxRowDepth = 0;
       }
-      totalWidth = Math.max(totalWidth, currentRowWidth);
-      maxHeight = Math.max(maxHeight, dims.height);
+      currentX += dims.width + padding;
+      totalWidth = Math.max(totalWidth, currentX);
+      maxRowDepth = Math.max(maxRowDepth, dims.height);
     });
     
     groupBounds.push({
       width: totalWidth + padding * 2,
-      height: rows * (maxHeight + padding) + 2, // Extra for label
+      depth: currentZ + maxRowDepth + padding * 2,
     });
   });
   
-  // Calculate grid layout for groups
+  // Calculate grid layout for groups on XZ plane
   let groupOffsetX = 0;
-  let groupOffsetY = 0;
-  let maxRowHeight = 0;
-  const groupSpacing = 5; // Space between groups in meters
-  const maxRowWidth = 100; // Max row width before wrapping
+  let groupOffsetZ = 0;
+  let maxRowDepth = 0;
+  const groupSpacing = 8; // Space between groups in meters
+  const maxRowWidth = 150; // Max row width before wrapping
   
-  const groupPositionsCalculated: Array<{ x: number; y: number }> = [];
+  const groupPositionsCalculated: Array<{ x: number; z: number }> = [];
   
   groupsArray.forEach((_groupData, index) => {
     const bounds = groupBounds[index];
@@ -346,70 +442,191 @@ export async function exportToGLB(data: ExportGLBData): Promise<void> {
     // Check if we need to wrap to next row
     if (groupOffsetX + bounds.width > maxRowWidth && groupOffsetX > 0) {
       groupOffsetX = 0;
-      groupOffsetY -= maxRowHeight + groupSpacing;
-      maxRowHeight = 0;
+      groupOffsetZ += maxRowDepth + groupSpacing;
+      maxRowDepth = 0;
     }
     
     groupPositionsCalculated.push({
       x: groupOffsetX,
-      y: groupOffsetY,
+      z: groupOffsetZ,
     });
     
     groupOffsetX += bounds.width + groupSpacing;
-    maxRowHeight = Math.max(maxRowHeight, bounds.height);
+    maxRowDepth = Math.max(maxRowDepth, bounds.depth);
   });
   
-  // Create groups with their areas - now with proper offsets
+  // Create groups with their areas
   groupsArray.forEach((groupData, index) => {
     groupData.members.forEach((id) => nodesInGroups.add(id));
     
-    // Use calculated position (ignoring boardLayout positions to avoid overlap)
     const calculatedPos = groupPositionsCalculated[index];
-    // Scale up to match the division by 50 in createGroupContainer
-    const position = { x: calculatedPos.x * 50, y: -calculatedPos.y * 50 };
     
     const groupMesh = createGroupContainer(
       groupData,
       nodes,
-      position,
-      boardLayout.areaOffsets
+      { x: calculatedPos.x, z: calculatedPos.z }
     );
     scene.add(groupMesh);
   });
   
-  // Create ungrouped areas
+  // Calculate position for summed rectangles (after detailed groups)
+  const summedStartZ = groupOffsetZ + maxRowDepth + groupSpacing * 3;
+  
+  // Calculate total project area first
+  let totalProjectArea = 0;
   const ungroupedNodes = Object.values(nodes).filter(
     (node) => !nodesInGroups.has(node.id)
   );
+  
+  groupsArray.forEach((groupData) => {
+    const memberNodes = groupData.members
+      .map((id) => nodes[id])
+      .filter(Boolean);
+    totalProjectArea += memberNodes.reduce(
+      (sum, n) => sum + n.areaPerUnit * n.count, 0
+    );
+  });
+  
+  ungroupedNodes.forEach((node) => {
+    totalProjectArea += node.areaPerUnit * node.count;
+  });
+  
+  // === SECTION 2: Summed group rectangles INSIDE project rectangle ===
+  const summedGroup = new THREE.Group();
+  summedGroup.name = 'ProjectProgram_WithGroups';
+  
+  // First, calculate layout of summed rectangles to determine project bounds
+  let summedOffsetX = 0;
+  let summedOffsetZ = 0;
+  let summedMaxRowDepth = 0;
+  const summedSpacing = 2;
+  const summedPadding = 3; // Padding inside project rectangle
+  
+  // Calculate dimensions for each group's summed rectangle
+  const groupDims: Array<{ width: number; depth: number; area: number }> = [];
+  groupsArray.forEach((groupData) => {
+    const memberNodes = groupData.members
+      .map((id) => nodes[id])
+      .filter(Boolean);
+    const groupTotalArea = memberNodes.reduce(
+      (sum, n) => sum + n.areaPerUnit * n.count, 0
+    );
+    const dims = areaToDimensions(groupTotalArea);
+    groupDims.push({ width: dims.width, depth: dims.height, area: groupTotalArea });
+  });
+  
+  // Calculate total width needed for all summed rectangles in a row
+  const totalSummedWidth = groupDims.reduce((sum, d) => sum + d.width, 0) + 
+    (groupDims.length - 1) * summedSpacing;
+  const maxSummedDepth = Math.max(...groupDims.map(d => d.depth), 10);
+  
+  // Project rectangle dimensions (to contain all summed rectangles)
+  const projectWidth = totalSummedWidth + summedPadding * 2;
+  const projectDepth = maxSummedDepth + summedPadding * 2;
+  
+  // Create project outline rectangle first
+  const projectRect = createProjectRectangle(
+    projectName,
+    projectWidth,
+    projectDepth,
+    { x: 0, z: 0 }
+  );
+  summedGroup.add(projectRect);
+  
+  // Place summed group rectangles inside the project rectangle
+  let innerOffsetX = summedPadding;
+  groupsArray.forEach((groupData, index) => {
+    const dims = groupDims[index];
+    
+    const summedRect = createGroupSummedRectangle(
+      groupData,
+      nodes,
+      { x: innerOffsetX, z: summedPadding + (maxSummedDepth - dims.depth) / 2 }
+    );
+    summedGroup.add(summedRect);
+    
+    innerOffsetX += dims.width + summedSpacing;
+  });
+  
+  summedGroup.position.set(0, 0, summedStartZ);
+  scene.add(summedGroup);
+  
+  // === SECTION 3: Fixed-depth strip rectangles (20m deep, vertical column, length extends right) ===
+  const stripDepth = 20; // Fixed 20m depth
+  const stripStartZ = summedStartZ + projectDepth + groupSpacing * 3;
+  
+  const stripGroup = new THREE.Group();
+  stripGroup.name = 'Strip_Rectangles';
+  
+  let stripOffsetZ = 0;
+  const stripSpacing = 2;
+  
+  groupsArray.forEach((groupData) => {
+    const memberNodes = groupData.members
+      .map((id) => nodes[id])
+      .filter(Boolean);
+    
+    if (memberNodes.length === 0) return;
+    
+    const result = createFixedWidthRectangle(
+      groupData,
+      nodes,
+      stripDepth,
+      { x: 0, z: stripOffsetZ } // Aligned to left (x=0), stacked vertically (z)
+    );
+    stripGroup.add(result.group);
+    
+    stripOffsetZ += stripDepth + stripSpacing;
+  });
+  
+  stripGroup.position.set(0, 0, stripStartZ);
+  scene.add(stripGroup);
+
+  // Create ungrouped areas (detailed)
   
   if (ungroupedNodes.length > 0) {
     const ungroupedGroup = new THREE.Group();
     ungroupedGroup.name = 'Ungrouped_Areas';
     
+    // Sort ungrouped by size
+    const sortedUngrouped = [...ungroupedNodes].sort((a, b) => 
+      (b.areaPerUnit * b.count) - (a.areaPerUnit * a.count)
+    );
+    
     let offsetX = 0;
-    ungroupedNodes.forEach((node) => {
+    let offsetZ = 0;
+    let maxRowDepthUngrouped = 0;
+    const padding = 1;
+    const maxRowWidthUngrouped = 50;
+    
+    sortedUngrouped.forEach((node) => {
       const dims = areaToDimensions(node.areaPerUnit * node.count);
-      const offset = boardLayout.areaOffsets[node.id];
+      
+      // Check if we need to wrap to next row
+      if (offsetX + dims.width > maxRowWidthUngrouped && offsetX > 0) {
+        offsetX = 0;
+        offsetZ += maxRowDepthUngrouped + padding;
+        maxRowDepthUngrouped = 0;
+      }
       
       const areaMesh = createAreaMesh(
         node,
         '#888888', // Gray for ungrouped
         {
-          x: offset ? offset.x / 50 : offsetX + dims.width / 2,
-          y: offset ? -offset.y / 50 : 0,
-          z: 0,
+          x: offsetX + dims.width / 2,
+          y: 0, // On the floor
+          z: offsetZ + dims.height / 2,
         }
       );
       ungroupedGroup.add(areaMesh);
       
-      if (!offset) {
-        offsetX += dims.width + 1;
-      }
+      offsetX += dims.width + padding;
+      maxRowDepthUngrouped = Math.max(maxRowDepthUngrouped, dims.height);
     });
     
-    // Position ungrouped below all groups
-    const ungroupedY = groupOffsetY - maxRowHeight - groupSpacing * 2;
-    ungroupedGroup.position.set(0, ungroupedY, 0);
+    // Position ungrouped after all groups
+    const ungroupedZ = groupOffsetZ + maxRowDepth + groupSpacing * 2;
+    ungroupedGroup.position.set(0, 0, ungroupedZ);
     scene.add(ungroupedGroup);
   }
   

@@ -12,6 +12,24 @@ function hexToArgb(hex: string): string {
   return 'FF' + hex.replace('#', '').toUpperCase();
 }
 
+// Convert a hex color to a pastel version (mix with white)
+function hexToPastel(hex: string, mixRatio = 0.6): string {
+  const color = hex.replace('#', '');
+  const r = parseInt(color.substring(0, 2), 16);
+  const g = parseInt(color.substring(2, 4), 16);
+  const b = parseInt(color.substring(4, 6), 16);
+  
+  // Mix with white (255, 255, 255)
+  const pastelR = Math.round(r + (255 - r) * mixRatio);
+  const pastelG = Math.round(g + (255 - g) * mixRatio);
+  const pastelB = Math.round(b + (255 - b) * mixRatio);
+  
+  return 'FF' + 
+    pastelR.toString(16).padStart(2, '0').toUpperCase() +
+    pastelG.toString(16).padStart(2, '0').toUpperCase() +
+    pastelB.toString(16).padStart(2, '0').toUpperCase();
+}
+
 // Determine if color is light or dark to choose contrasting text
 function isLightColor(hex: string): boolean {
   const color = hex.replace('#', '');
@@ -106,16 +124,16 @@ export async function exportToExcel(data: ExportData): Promise<void> {
   areasTitle.alignment = { horizontal: 'center' };
 
   // Header row
-  const areasHeaders = ['Area Name', 'Area/Unit (m²)', 'Count', 'Total Area (m²)', 'Group', 'Color'];
+  const areasHeaders = ['Area Name', 'Area/Unit (m²)', 'Count', 'Total Area (m²)', 'Group'];
   const areasHeaderRow = allAreasSheet.getRow(3);
   areasHeaders.forEach((header, idx) => {
     const cell = areasHeaderRow.getCell(idx + 1);
     cell.value = header;
-    cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.font = { bold: true, color: { argb: 'FF374151' } };
     cell.fill = {
       type: 'pattern',
       pattern: 'solid',
-      fgColor: { argb: 'FF374151' },
+      fgColor: { argb: 'FFE5E7EB' },
     };
     cell.alignment = { horizontal: 'center' };
     cell.border = {
@@ -136,36 +154,34 @@ export async function exportToExcel(data: ExportData): Promise<void> {
 
   // Data rows
   let rowIdx = 4;
+  const dataStartRow = 4;
   sortedNodes.forEach((node) => {
     const groupInfo = nodeToGroup.get(node.id);
     const row = allAreasSheet.getRow(rowIdx);
     
     row.getCell(1).value = node.name;
-    row.getCell(2).value = Math.round(node.areaPerUnit * 100) / 100;
+    row.getCell(2).value = node.areaPerUnit;
     row.getCell(2).numFmt = '#,##0.00';
     row.getCell(3).value = node.count;
-    row.getCell(4).value = Math.round(node.areaPerUnit * node.count * 100) / 100;
+    // Formula: Area/Unit * Count
+    row.getCell(4).value = { formula: `B${rowIdx}*C${rowIdx}` };
     row.getCell(4).numFmt = '#,##0.00';
     row.getCell(5).value = groupInfo?.name || 'Ungrouped';
     
-    // Color cell with actual color
+    // Apply pastel color from group to the entire row
     if (groupInfo?.color) {
-      const colorCell = row.getCell(6);
-      colorCell.value = groupInfo.color;
-      colorCell.fill = {
-        type: 'pattern',
-        pattern: 'solid',
-        fgColor: { argb: hexToArgb(groupInfo.color) },
-      };
-      colorCell.font = {
-        color: { argb: isLightColor(groupInfo.color) ? 'FF000000' : 'FFFFFFFF' },
-      };
-    } else {
-      row.getCell(6).value = '-';
+      const pastelColor = hexToPastel(groupInfo.color, 0.7);
+      for (let i = 1; i <= 5; i++) {
+        row.getCell(i).fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: pastelColor },
+        };
+      }
     }
 
     // Apply borders
-    for (let i = 1; i <= 6; i++) {
+    for (let i = 1; i <= 5; i++) {
       row.getCell(i).border = {
         top: { style: 'thin', color: { argb: 'FFE5E7EB' } },
         left: { style: 'thin', color: { argb: 'FFE5E7EB' } },
@@ -174,32 +190,23 @@ export async function exportToExcel(data: ExportData): Promise<void> {
       };
     }
 
-    // Alternate row colors
-    if (rowIdx % 2 === 0) {
-      for (let i = 1; i <= 5; i++) {
-        row.getCell(i).fill = {
-          type: 'pattern',
-          pattern: 'solid',
-          fgColor: { argb: 'FFF9FAFB' },
-        };
-      }
-    }
-
     rowIdx++;
   });
 
-  // Totals row
+  // Totals row with formulas
   rowIdx++;
   const totalRow = allAreasSheet.getRow(rowIdx);
   totalRow.getCell(1).value = 'TOTAL';
   totalRow.getCell(1).font = { bold: true };
-  totalRow.getCell(3).value = totalUnits;
+  // SUM formula for Count
+  totalRow.getCell(3).value = { formula: `SUM(C${dataStartRow}:C${rowIdx - 2})` };
   totalRow.getCell(3).font = { bold: true };
-  totalRow.getCell(4).value = Math.round(totalArea * 100) / 100;
+  // SUM formula for Total Area
+  totalRow.getCell(4).value = { formula: `SUM(D${dataStartRow}:D${rowIdx - 2})` };
   totalRow.getCell(4).font = { bold: true };
   totalRow.getCell(4).numFmt = '#,##0.00';
   
-  for (let i = 1; i <= 6; i++) {
+  for (let i = 1; i <= 5; i++) {
     totalRow.getCell(i).fill = {
       type: 'pattern',
       pattern: 'solid',
@@ -218,7 +225,6 @@ export async function exportToExcel(data: ExportData): Promise<void> {
     { width: 10 },
     { width: 18 },
     { width: 20 },
-    { width: 12 },
   ];
 
   // ============================================
@@ -234,16 +240,16 @@ export async function exportToExcel(data: ExportData): Promise<void> {
   groupsTitle.alignment = { horizontal: 'center' };
 
   // Header row
-  const groupHeaders = ['Group Name', 'Color', 'Area Types', 'Total Area (m²)', 'Total Units'];
+  const groupHeaders = ['Group Name', 'Area Types', 'Total Area (m²)', 'Total Units'];
   const groupHeaderRow = groupsSheet.getRow(3);
   groupHeaders.forEach((header, idx) => {
     const cell = groupHeaderRow.getCell(idx + 1);
     cell.value = header;
-    cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.font = { bold: true, color: { argb: 'FF374151' } };
     cell.fill = {
       type: 'pattern',
       pattern: 'solid',
-      fgColor: { argb: 'FF374151' },
+      fgColor: { argb: 'FFE5E7EB' },
     };
     cell.alignment = { horizontal: 'center' };
     cell.border = {
@@ -256,6 +262,7 @@ export async function exportToExcel(data: ExportData): Promise<void> {
 
   // Group data
   rowIdx = 4;
+  const groupDataStartRow = 4;
   groupsArray.forEach((group) => {
     const memberNodes = group.members.map((id) => nodes[id]).filter(Boolean);
     const groupTotalArea = memberNodes.reduce((sum, n) => sum + n.areaPerUnit * n.count, 0);
@@ -263,33 +270,28 @@ export async function exportToExcel(data: ExportData): Promise<void> {
 
     const row = groupsSheet.getRow(rowIdx);
     
-    // Group name with colored background
+    // Group name with pastel colored background
     const nameCell = row.getCell(1);
     nameCell.value = group.name;
-    nameCell.font = { bold: true, color: { argb: isLightColor(group.color) ? 'FF000000' : 'FFFFFFFF' } };
-    nameCell.fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: hexToArgb(group.color) },
-    };
+    nameCell.font = { bold: true };
+    
+    // Apply pastel color to entire row
+    const pastelColor = hexToPastel(group.color, 0.7);
+    for (let i = 1; i <= 4; i++) {
+      row.getCell(i).fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: pastelColor },
+      };
+    }
 
-    // Color cell
-    const colorCell = row.getCell(2);
-    colorCell.value = group.color;
-    colorCell.fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: hexToArgb(group.color) },
-    };
-    colorCell.font = { color: { argb: isLightColor(group.color) ? 'FF000000' : 'FFFFFFFF' } };
-
-    row.getCell(3).value = memberNodes.length;
-    row.getCell(4).value = Math.round(groupTotalArea * 100) / 100;
-    row.getCell(4).numFmt = '#,##0.00';
-    row.getCell(5).value = groupTotalUnits;
+    row.getCell(2).value = memberNodes.length;
+    row.getCell(3).value = Math.round(groupTotalArea * 100) / 100;
+    row.getCell(3).numFmt = '#,##0.00';
+    row.getCell(4).value = groupTotalUnits;
 
     // Apply borders
-    for (let i = 1; i <= 5; i++) {
+    for (let i = 1; i <= 4; i++) {
       row.getCell(i).border = {
         top: { style: 'thin', color: { argb: 'FFE5E7EB' } },
         left: { style: 'thin', color: { argb: 'FFE5E7EB' } },
@@ -312,13 +314,12 @@ export async function exportToExcel(data: ExportData): Promise<void> {
     const row = groupsSheet.getRow(rowIdx);
     row.getCell(1).value = 'Ungrouped';
     row.getCell(1).font = { italic: true };
-    row.getCell(2).value = '-';
-    row.getCell(3).value = ungroupedNodes.length;
-    row.getCell(4).value = Math.round(ungroupedTotalArea * 100) / 100;
-    row.getCell(4).numFmt = '#,##0.00';
-    row.getCell(5).value = ungroupedTotalUnits;
+    row.getCell(2).value = ungroupedNodes.length;
+    row.getCell(3).value = Math.round(ungroupedTotalArea * 100) / 100;
+    row.getCell(3).numFmt = '#,##0.00';
+    row.getCell(4).value = ungroupedTotalUnits;
 
-    for (let i = 1; i <= 5; i++) {
+    for (let i = 1; i <= 4; i++) {
       row.getCell(i).border = {
         top: { style: 'thin', color: { argb: 'FFE5E7EB' } },
         left: { style: 'thin', color: { argb: 'FFE5E7EB' } },
@@ -331,20 +332,23 @@ export async function exportToExcel(data: ExportData): Promise<void> {
     rowIdx++;
   }
 
-  // Totals row
+  // Totals row with formulas
   rowIdx++;
   const groupsTotalRow = groupsSheet.getRow(rowIdx);
   groupsTotalRow.getCell(1).value = 'TOTAL';
   groupsTotalRow.getCell(1).font = { bold: true };
-  groupsTotalRow.getCell(3).value = nodesArray.length;
+  // SUM formula for Area Types
+  groupsTotalRow.getCell(2).value = { formula: `SUM(B${groupDataStartRow}:B${rowIdx - 2})` };
+  groupsTotalRow.getCell(2).font = { bold: true };
+  // SUM formula for Total Area
+  groupsTotalRow.getCell(3).value = { formula: `SUM(C${groupDataStartRow}:C${rowIdx - 2})` };
   groupsTotalRow.getCell(3).font = { bold: true };
-  groupsTotalRow.getCell(4).value = Math.round(totalArea * 100) / 100;
+  groupsTotalRow.getCell(3).numFmt = '#,##0.00';
+  // SUM formula for Total Units
+  groupsTotalRow.getCell(4).value = { formula: `SUM(D${groupDataStartRow}:D${rowIdx - 2})` };
   groupsTotalRow.getCell(4).font = { bold: true };
-  groupsTotalRow.getCell(4).numFmt = '#,##0.00';
-  groupsTotalRow.getCell(5).value = totalUnits;
-  groupsTotalRow.getCell(5).font = { bold: true };
 
-  for (let i = 1; i <= 5; i++) {
+  for (let i = 1; i <= 4; i++) {
     groupsTotalRow.getCell(i).fill = {
       type: 'pattern',
       pattern: 'solid',
@@ -361,7 +365,6 @@ export async function exportToExcel(data: ExportData): Promise<void> {
   // Set column widths
   groupsSheet.columns = [
     { width: 25 },
-    { width: 12 },
     { width: 12 },
     { width: 18 },
     { width: 12 },
@@ -384,34 +387,31 @@ export async function exportToExcel(data: ExportData): Promise<void> {
     }
 
     const sheet = workbook.addWorksheet(finalName);
+    const pastelColor = hexToPastel(group.color, 0.6);
 
-    // Title with group color
+    // Title with pastel group color
     sheet.mergeCells('A1:D1');
     const groupTitle = sheet.getCell('A1');
     groupTitle.value = group.name.toUpperCase();
-    groupTitle.font = { size: 16, bold: true, color: { argb: isLightColor(group.color) ? 'FF000000' : 'FFFFFFFF' } };
+    groupTitle.font = { size: 16, bold: true };
     groupTitle.fill = {
       type: 'pattern',
       pattern: 'solid',
-      fgColor: { argb: hexToArgb(group.color) },
+      fgColor: { argb: pastelColor },
     };
     groupTitle.alignment = { horizontal: 'center' };
 
-    // Color info
-    sheet.getCell('A2').value = `Color: ${group.color}`;
-    sheet.getCell('A2').font = { italic: true, size: 10 };
-
     // Header row
     const headers = ['Area Name', 'Area/Unit (m²)', 'Count', 'Total Area (m²)'];
-    const headerRow = sheet.getRow(4);
+    const headerRow = sheet.getRow(3);
     headers.forEach((header, idx) => {
       const cell = headerRow.getCell(idx + 1);
       cell.value = header;
-      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.font = { bold: true };
       cell.fill = {
         type: 'pattern',
         pattern: 'solid',
-        fgColor: { argb: hexToArgb(group.color) },
+        fgColor: { argb: pastelColor },
       };
       cell.alignment = { horizontal: 'center' };
       cell.border = {
@@ -422,15 +422,17 @@ export async function exportToExcel(data: ExportData): Promise<void> {
       };
     });
 
-    // Data rows
-    let dataRowIdx = 5;
+    // Data rows with formulas
+    let dataRowIdx = 4;
+    const groupDataStart = 4;
     memberNodes.forEach((node) => {
       const row = sheet.getRow(dataRowIdx);
       row.getCell(1).value = node.name;
-      row.getCell(2).value = Math.round(node.areaPerUnit * 100) / 100;
+      row.getCell(2).value = node.areaPerUnit;
       row.getCell(2).numFmt = '#,##0.00';
       row.getCell(3).value = node.count;
-      row.getCell(4).value = Math.round(node.areaPerUnit * node.count * 100) / 100;
+      // Formula: Area/Unit * Count
+      row.getCell(4).value = { formula: `B${dataRowIdx}*C${dataRowIdx}` };
       row.getCell(4).numFmt = '#,##0.00';
 
       for (let i = 1; i <= 4; i++) {
@@ -442,7 +444,7 @@ export async function exportToExcel(data: ExportData): Promise<void> {
         };
       }
 
-      // Alternate row shading
+      // Alternate row shading with very light gray
       if (dataRowIdx % 2 === 1) {
         for (let i = 1; i <= 4; i++) {
           row.getCell(i).fill = {
@@ -456,17 +458,16 @@ export async function exportToExcel(data: ExportData): Promise<void> {
       dataRowIdx++;
     });
 
-    // Totals
-    const groupTotalArea = memberNodes.reduce((sum, n) => sum + n.areaPerUnit * n.count, 0);
-    const groupTotalUnits = memberNodes.reduce((sum, n) => sum + n.count, 0);
-
+    // Totals with formulas
     dataRowIdx++;
     const totalsRow = sheet.getRow(dataRowIdx);
     totalsRow.getCell(1).value = 'TOTAL';
     totalsRow.getCell(1).font = { bold: true };
-    totalsRow.getCell(3).value = groupTotalUnits;
+    // SUM formula for Count
+    totalsRow.getCell(3).value = { formula: `SUM(C${groupDataStart}:C${dataRowIdx - 2})` };
     totalsRow.getCell(3).font = { bold: true };
-    totalsRow.getCell(4).value = Math.round(groupTotalArea * 100) / 100;
+    // SUM formula for Total Area
+    totalsRow.getCell(4).value = { formula: `SUM(D${groupDataStart}:D${dataRowIdx - 2})` };
     totalsRow.getCell(4).font = { bold: true };
     totalsRow.getCell(4).numFmt = '#,##0.00';
 
@@ -474,12 +475,9 @@ export async function exportToExcel(data: ExportData): Promise<void> {
       totalsRow.getCell(i).fill = {
         type: 'pattern',
         pattern: 'solid',
-        fgColor: { argb: hexToArgb(group.color) },
+        fgColor: { argb: pastelColor },
       };
-      totalsRow.getCell(i).font = { 
-        bold: true, 
-        color: { argb: isLightColor(group.color) ? 'FF000000' : 'FFFFFFFF' } 
-      };
+      totalsRow.getCell(i).font = { bold: true };
       totalsRow.getCell(i).border = {
         top: { style: 'medium' },
         bottom: { style: 'medium' },
@@ -508,9 +506,9 @@ export async function exportToExcel(data: ExportData): Promise<void> {
     title.fill = {
       type: 'pattern',
       pattern: 'solid',
-      fgColor: { argb: 'FF6B7280' },
+      fgColor: { argb: 'FFE5E7EB' },
     };
-    title.font = { size: 16, bold: true, color: { argb: 'FFFFFFFF' } };
+    title.font = { size: 16, bold: true, color: { argb: 'FF374151' } };
     title.alignment = { horizontal: 'center' };
 
     // Header row
@@ -519,11 +517,11 @@ export async function exportToExcel(data: ExportData): Promise<void> {
     headers.forEach((header, idx) => {
       const cell = headerRow.getCell(idx + 1);
       cell.value = header;
-      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.font = { bold: true, color: { argb: 'FF374151' } };
       cell.fill = {
         type: 'pattern',
         pattern: 'solid',
-        fgColor: { argb: 'FF6B7280' },
+        fgColor: { argb: 'FFE5E7EB' },
       };
       cell.alignment = { horizontal: 'center' };
       cell.border = {
@@ -534,15 +532,17 @@ export async function exportToExcel(data: ExportData): Promise<void> {
       };
     });
 
-    // Data rows
+    // Data rows with formulas
     let dataRowIdx = 4;
+    const ungroupedDataStart = 4;
     ungroupedNodes.forEach((node) => {
       const row = sheet.getRow(dataRowIdx);
       row.getCell(1).value = node.name;
-      row.getCell(2).value = Math.round(node.areaPerUnit * 100) / 100;
+      row.getCell(2).value = node.areaPerUnit;
       row.getCell(2).numFmt = '#,##0.00';
       row.getCell(3).value = node.count;
-      row.getCell(4).value = Math.round(node.areaPerUnit * node.count * 100) / 100;
+      // Formula: Area/Unit * Count
+      row.getCell(4).value = { formula: `B${dataRowIdx}*C${dataRowIdx}` };
       row.getCell(4).numFmt = '#,##0.00';
 
       for (let i = 1; i <= 4; i++) {
@@ -567,17 +567,16 @@ export async function exportToExcel(data: ExportData): Promise<void> {
       dataRowIdx++;
     });
 
-    // Totals
-    const ungroupedTotalArea = ungroupedNodes.reduce((sum, n) => sum + n.areaPerUnit * n.count, 0);
-    const ungroupedTotalUnits = ungroupedNodes.reduce((sum, n) => sum + n.count, 0);
-
+    // Totals with formulas
     dataRowIdx++;
     const totalsRow = sheet.getRow(dataRowIdx);
     totalsRow.getCell(1).value = 'TOTAL';
     totalsRow.getCell(1).font = { bold: true };
-    totalsRow.getCell(3).value = ungroupedTotalUnits;
+    // SUM formula for Count
+    totalsRow.getCell(3).value = { formula: `SUM(C${ungroupedDataStart}:C${dataRowIdx - 2})` };
     totalsRow.getCell(3).font = { bold: true };
-    totalsRow.getCell(4).value = Math.round(ungroupedTotalArea * 100) / 100;
+    // SUM formula for Total Area
+    totalsRow.getCell(4).value = { formula: `SUM(D${ungroupedDataStart}:D${dataRowIdx - 2})` };
     totalsRow.getCell(4).font = { bold: true };
     totalsRow.getCell(4).numFmt = '#,##0.00';
 

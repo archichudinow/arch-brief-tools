@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState } from 'react';
+import { useRef, useEffect, useState, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -21,6 +21,23 @@ import {
   X,
   Play
 } from 'lucide-react';
+
+// Helper to render action summary with highlighted verbs
+function renderActionSummary(text: string): ReactNode {
+  // Split by **word** patterns and render highlighted parts
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, i) => {
+    if (part.startsWith('**') && part.endsWith('**')) {
+      const word = part.slice(2, -2);
+      return (
+        <span key={i} className="font-semibold text-primary">
+          {word}
+        </span>
+      );
+    }
+    return <span key={i}>{part}</span>;
+  });
+}
 
 export function ChatPanel() {
   const messages = useChatStore((s) => s.messages);
@@ -343,13 +360,22 @@ export function ChatPanel() {
                         <Play className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
                         <div className="flex-1 min-w-0">
                           <p className="font-medium text-sm">{option.title}</p>
-                          <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{option.prompt}</p>
+                          {/* Action summary with highlighted verbs */}
+                          <p className="text-xs text-foreground/80 mt-1.5 leading-relaxed">
+                            {option.actionSummary ? renderActionSummary(option.actionSummary) : option.prompt}
+                          </p>
+                          {/* Operations as small badges */}
                           <div className="flex flex-wrap gap-1 mt-2">
-                            {option.operations.slice(0, 3).map((op, j) => (
-                              <Badge key={j} variant="secondary" className="text-xs">
+                            {option.operations.slice(0, 4).map((op, j) => (
+                              <Badge key={j} variant="outline" className="text-[10px] font-normal py-0">
                                 {op}
                               </Badge>
                             ))}
+                            {option.operations.length > 4 && (
+                              <Badge variant="outline" className="text-[10px] font-normal py-0 text-muted-foreground">
+                                +{option.operations.length - 4} more
+                              </Badge>
+                            )}
                           </div>
                         </div>
                       </div>

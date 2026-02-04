@@ -70,13 +70,14 @@ PROPOSAL TYPES:
   ]
 }
 
-5. create_groups - Create groups
+5. create_groups - Create groups OR divide areas into equal sub-groups
 {
   "type": "create_groups",
   "groups": [
     { "name": "Group Name", "color": "#3b82f6", "memberNodeIds": ["uuid"], "memberNames": ["Area"] }
   ]
 }
+NOTE: When asked to "divide into N equal groups", use create_groups with N groups, distributing areas so each group has approximately equal total area.
 
 6. assign_to_group - Assign areas to group
 {
@@ -94,6 +95,49 @@ PROPOSAL TYPES:
     { "targetType": "area", "targetId": "uuid", "targetName": "Name", "content": "Note text", "reason": "Optional reasoning" }
   ]
 }
+
+========================================
+GROUP MANIPULATION OPERATIONS
+========================================
+Use these when user wants to manipulate GROUPS themselves (not areas within groups).
+
+8. split_group_equal - Split a GROUP into N equal copies (divides area counts proportionally)
+{
+  "type": "split_group_equal",
+  "groupId": "group-uuid",
+  "groupName": "Original Group",
+  "parts": 4,
+  "nameSuffix": "Unit"  // Result: "Original Group - Unit 1", "Unit 2", etc.
+}
+USE WHEN: "Split this group into 4 units", "Duplicate group 8 times", "Make 3 copies of this group"
+
+9. split_group_proportion - Split a GROUP by percentage (scales area counts by proportion)
+{
+  "type": "split_group_proportion",
+  "groupId": "group-uuid",
+  "groupName": "Original Group",
+  "proportions": [
+    { "name": "Large Wing", "percent": 60 },
+    { "name": "Small Wing", "percent": 40 }
+  ]
+}
+USE WHEN: "Split group 60/40", "Divide into 70% and 30%", "Two thirds / one third"
+
+10. merge_group_areas - Merge all areas in a group into ONE combined area
+{
+  "type": "merge_group_areas",
+  "groupId": "group-uuid",
+  "groupName": "Group Name",
+  "newAreaName": "Combined Area"  // Optional, defaults to group name
+}
+USE WHEN: "Combine all areas in this group", "Merge everything in group into one"
+
+IMPORTANT - DISTINGUISH BETWEEN:
+- "Split/divide the AREAS" → use split_area (splits individual area into parts)
+- "Split/divide the GROUP" → use split_group_equal or split_group_proportion (duplicates group structure)
+- "Divide into N equal groups" → use create_groups (partition areas into groups)
+- "Merge areas" → use merge_areas (combine specific areas)
+- "Merge all in group" → use merge_group_areas (combine all areas within a group)
 
 CRITICAL RULES:
 - Use exact UUIDs from provided context
@@ -141,6 +185,21 @@ For EACH row that has a name and area value, extract:
 - section: What section/header this appears under (if any)
 - lineType: Your best guess - "item" | "subtotal" | "total" | "header"
 - areaType: "net" | "gross" | "unknown" (look for NVO, NLA, Net, GFA, GIA, Gross)
+- comment: Any descriptive text, notes, or requirements that accompany this item (NOT the name itself)
+
+IMPORTANT - Extract COMMENTS for architectural context:
+Comments often contain valuable information like:
+- Adjacency requirements: "Adjacent to reception area"
+- Configuration notes: "Each living group has its own front door"
+- Equipment: "Equipped with a counter and one workstation"
+- Sizing rationale: "Assuming +/- 9m² per resident"
+- Constraints: "Distance to component: max. 90m"
+
+Examples:
+- "Reception area  1  10  10  Equipped with a counter and one workstation. Adjacent to the meeting room."
+  → comment: "Equipped with a counter and one workstation. Adjacent to the meeting room."
+- "Medicine room  4  6  24  Centrally located per 2 residential groups"
+  → comment: "Centrally located per 2 residential groups"
 
 IMPORTANT - Recognize these patterns:
 1. ITEMS: "Living / Bedroom: 80 × 30 m² = 2,400 m²" → value: 30, multiplier: 80
@@ -164,10 +223,10 @@ Clues for areaType:
 OUTPUT FORMAT (JSON only):
 {
   "rows": [
-    { "text": "Classroom", "value": 120, "multiplier": 6, "section": "Learning Cluster", "parentSection": "Learning, Research & Innovation", "lineType": "item", "isOutdoor": false, "areaType": "unknown" },
-    { "text": "Total Net Floor Area (NVO)", "value": 4257, "multiplier": 1, "section": null, "parentSection": null, "lineType": "total", "isOutdoor": false, "areaType": "net" },
-    { "text": "Net-to-Gross Factor", "value": 1.45, "multiplier": 1, "section": null, "parentSection": null, "lineType": "factor", "isOutdoor": false, "areaType": "unknown" },
-    { "text": "Total Gross Floor Area", "value": 6173, "multiplier": 1, "section": null, "parentSection": null, "lineType": "total", "isOutdoor": false, "areaType": "gross" }
+    { "text": "Reception area", "value": 10, "multiplier": 1, "section": "General facilities", "parentSection": null, "lineType": "item", "isOutdoor": false, "areaType": "unknown", "comment": "Equipped with a counter and one workstation. Adjacent to the meeting room." },
+    { "text": "Medicine room", "value": 6, "multiplier": 4, "section": "General facilities", "parentSection": null, "lineType": "item", "isOutdoor": false, "areaType": "unknown", "comment": "Centrally located per 2 residential groups" },
+    { "text": "Total Net Floor Area (NVO)", "value": 4257, "multiplier": 1, "section": null, "parentSection": null, "lineType": "total", "isOutdoor": false, "areaType": "net", "comment": null },
+    { "text": "Net-to-Gross Factor", "value": 1.45, "multiplier": 1, "section": null, "parentSection": null, "lineType": "factor", "isOutdoor": false, "areaType": "unknown", "comment": null }
   ],
   "indoorTotal": 14500,
   "outdoorTotal": 9800,
@@ -308,6 +367,69 @@ export const FEW_SHOT_EXAMPLES = {
         ]
       }]
     }
+  },
+  
+  divide_into_equal_groups: {
+    user: `Divide into 3 equal size groups`,
+    context: `Selected Group: "Office Areas" (ID: grp-1)\nGroup contains:\n- ID: "a1" | Name: "Open Office" | 300m²\n- ID: "a2" | Name: "Meeting Room A" | 50m²\n- ID: "a3" | Name: "Meeting Room B" | 50m²\n- ID: "a4" | Name: "Focus Rooms" | 80m²\n- ID: "a5" | Name: "Director Office" | 60m²\n- ID: "a6" | Name: "Break Room" | 60m²`,
+    response: {
+      message: "Dividing into 3 sub-groups of ~200m² each",
+      proposals: [{
+        type: "create_groups",
+        groups: [
+          { name: "Office Zone 1", color: "#3b82f6", memberNodeIds: ["a1"], memberNames: ["Open Office"] },
+          { name: "Office Zone 2", color: "#22c55e", memberNodeIds: ["a2", "a3", "a4"], memberNames: ["Meeting Room A", "Meeting Room B", "Focus Rooms"] },
+          { name: "Office Zone 3", color: "#f59e0b", memberNodeIds: ["a5", "a6"], memberNames: ["Director Office", "Break Room"] }
+        ]
+      }]
+    }
+  },
+  
+  // GROUP MANIPULATION EXAMPLES
+  split_group_equal: {
+    user: `Split this group into 4 units`,
+    context: `Selected Group: "Residential Wing" (ID: grp-res-1, Color: #3b82f6)\nGroup contains:\n- ID: "a1" | Name: "Living Room" | 40m² × 8 units\n- ID: "a2" | Name: "Bedroom" | 25m² × 8 units\n- ID: "a3" | Name: "Bathroom" | 8m² × 8 units`,
+    response: {
+      message: "Splitting Residential Wing into 4 equal units (2 each)",
+      proposals: [{
+        type: "split_group_equal",
+        groupId: "grp-res-1",
+        groupName: "Residential Wing",
+        parts: 4,
+        nameSuffix: "Unit"
+      }]
+    }
+  },
+  
+  split_group_proportion: {
+    user: `Split this group 60/40`,
+    context: `Selected Group: "Office Block" (ID: grp-off-1, Color: #22c55e)\nGroup contains:\n- ID: "a1" | Name: "Workstations" | 200m² × 10 units\n- ID: "a2" | Name: "Meeting Room" | 30m² × 10 units`,
+    response: {
+      message: "Splitting Office Block into 60% and 40% portions",
+      proposals: [{
+        type: "split_group_proportion",
+        groupId: "grp-off-1",
+        groupName: "Office Block",
+        proportions: [
+          { name: "Main Wing", percent: 60 },
+          { name: "Secondary Wing", percent: 40 }
+        ]
+      }]
+    }
+  },
+  
+  merge_group_areas: {
+    user: `Combine all areas in this group into one`,
+    context: `Selected Group: "Storage" (ID: grp-stor-1)\nGroup contains:\n- ID: "a1" | Name: "General Storage" | 50m²\n- ID: "a2" | Name: "Archive" | 30m²\n- ID: "a3" | Name: "Equipment Room" | 20m²`,
+    response: {
+      message: "Merging all storage areas into one combined area",
+      proposals: [{
+        type: "merge_group_areas",
+        groupId: "grp-stor-1",
+        groupName: "Storage",
+        newAreaName: "Combined Storage"
+      }]
+    }
   }
 };
 
@@ -359,10 +481,29 @@ export function buildSystemPrompt(config: PromptConfig): string {
   if (config.mode === 'agent' && config.includeFewShot) {
     parts.push('\nEXAMPLE INTERACTIONS:');
     
-    const example = FEW_SHOT_EXAMPLES.split_area;
-    parts.push(`\nUser: ${example.user}`);
-    parts.push(`Context: ${example.context}`);
-    parts.push(`Response: ${JSON.stringify(example.response)}`);
+    // Split area example
+    const splitExample = FEW_SHOT_EXAMPLES.split_area;
+    parts.push(`\nUser: ${splitExample.user}`);
+    parts.push(`Context: ${splitExample.context}`);
+    parts.push(`Response: ${JSON.stringify(splitExample.response)}`);
+    
+    // Divide into equal groups example
+    const divideExample = FEW_SHOT_EXAMPLES.divide_into_equal_groups;
+    parts.push(`\nUser: ${divideExample.user}`);
+    parts.push(`Context: ${divideExample.context}`);
+    parts.push(`Response: ${JSON.stringify(divideExample.response)}`);
+    
+    // Split group equal example
+    const splitGroupExample = FEW_SHOT_EXAMPLES.split_group_equal;
+    parts.push(`\nUser: ${splitGroupExample.user}`);
+    parts.push(`Context: ${splitGroupExample.context}`);
+    parts.push(`Response: ${JSON.stringify(splitGroupExample.response)}`);
+    
+    // Split group proportion example
+    const splitPropExample = FEW_SHOT_EXAMPLES.split_group_proportion;
+    parts.push(`\nUser: ${splitPropExample.user}`);
+    parts.push(`Context: ${splitPropExample.context}`);
+    parts.push(`Response: ${JSON.stringify(splitPropExample.response)}`);
   }
   
   return parts.join('\n');
@@ -372,45 +513,84 @@ export function buildSystemPrompt(config: PromptConfig): string {
 // PROMPT ENHANCER
 // ============================================
 
-export const PROMPT_ENHANCER_SYSTEM = `You help refine architectural program requests. Given a user's brief prompt and their selected areas/groups, suggest 2-3 refined options.
+export const PROMPT_ENHANCER_SYSTEM = `You are an intention translator for an architectural brief tool. Your job is to translate the user's natural language request into clear, executable action language.
 
-Each option should:
-- Be more specific than the original
-- Clearly describe what operation will be performed
-- Show which areas/groups will be affected
+Purpose: Help users verify that you correctly understood their intention BEFORE executing.
+
+For each interpretation, provide:
+1. A short title (3-5 words)
+2. The refined prompt to execute
+3. An "actionSummary" - a human-readable sentence describing ALL operations with action verbs **bolded** using markdown **word** syntax
+4. Operations list - each discrete action that will be performed
+5. Affected items - names of areas/groups that will be modified
+
+ACTION VERBS TO HIGHLIGHT:
+**Create**, **Split**, **Merge**, **Delete**, **Rename**, **Resize**, **Group**, **Assign**, **Move**, **Copy**, **Distribute**, **Organize**, **Update**, **Add**, **Remove**
 
 OUTPUT FORMAT (JSON only):
 {
   "options": [
     {
-      "title": "Short action title (3-5 words)",
+      "title": "Short action title",
       "prompt": "The refined prompt to execute",
-      "operations": ["Operation 1 description", "Operation 2 description"],
-      "affectedItems": ["Area/Group name 1", "Area/Group name 2"]
+      "actionSummary": "**Create** 8 residential groups, then **distribute** existing areas equally across all groups",
+      "operations": ["Create 8 new groups", "Distribute 24 areas equally"],
+      "affectedItems": ["Living/bedroom", "Shared living room", "..."]
     }
   ]
 }
 
-EXAMPLE:
-User prompt: "organize this better"
-Context: 5 areas including Lobby, Reception, Office, Meeting Room, Cafeteria
+EXAMPLE 1:
+User: "split group into 8 equal groups"
+Context: Selected Group "Client Facilities" with 5 area types (80 Living/bedroom, 8 Shared living room, etc.)
 
 Response:
 {
   "options": [
     {
-      "title": "Group by Access Type",
-      "prompt": "Create groups for public-facing areas (Lobby, Reception, Cafeteria) and private work areas (Office, Meeting Room)",
-      "operations": ["Create 'Public Areas' group", "Create 'Private Areas' group", "Assign areas to groups"],
-      "affectedItems": ["Lobby", "Reception", "Cafeteria", "Office", "Meeting Room"]
+      "title": "8 Equal Residential Units",
+      "prompt": "Create 8 residential unit groups from Client Facilities, distributing areas so each unit has approximately equal total area",
+      "actionSummary": "**Create** 8 new 'Residential Unit' groups, **distribute** all Client Facilities areas into these groups with equal total m² per group",
+      "operations": ["Create 8 groups named 'Residential Unit 1-8'", "Distribute 5 area types across groups", "Each unit ~390m² total"],
+      "affectedItems": ["Living/bedroom", "Shared living room", "Family/relaxation room", "storage per residential group", "Staff restroom"]
     },
     {
-      "title": "Group by Function",
-      "prompt": "Organize into functional zones: Entry (Lobby, Reception), Work (Office, Meeting Room), and Amenities (Cafeteria)",
-      "operations": ["Create 3 functional groups", "Assign all 5 areas"],
-      "affectedItems": ["Lobby", "Reception", "Office", "Meeting Room", "Cafeteria"]
+      "title": "8 Living Groups with Shared",
+      "prompt": "Create 8 living groups, split Living/bedroom 10 per group, keep shared areas centralized",
+      "actionSummary": "**Create** 8 'Living Group' groups, **split** Living/bedroom (10 each), **assign** shared areas to all groups",
+      "operations": ["Create 8 groups", "Split 80 Living/bedroom into 8×10", "Share common areas across groups"],
+      "affectedItems": ["Living/bedroom", "Shared living room", "Family/relaxation room", "storage per residential group", "Staff restroom"]
     }
   ]
 }
 
-Keep options distinct and actionable.`;
+EXAMPLE 2:
+User: "make offices bigger"
+Context: 3 office areas selected (Office A 20m², Office B 20m², Office C 15m²)
+
+Response:
+{
+  "options": [
+    {
+      "title": "Increase All by 25%",
+      "prompt": "Increase all selected office areas by 25%",
+      "actionSummary": "**Resize** Office A to 25m², Office B to 25m², Office C to 19m²",
+      "operations": ["Resize Office A: 20→25m²", "Resize Office B: 20→25m²", "Resize Office C: 15→19m²"],
+      "affectedItems": ["Office A", "Office B", "Office C"]
+    },
+    {
+      "title": "Standardize to 25m²",
+      "prompt": "Set all office areas to 25m² standard size",
+      "actionSummary": "**Update** all 3 offices to uniform 25m² size",
+      "operations": ["Resize Office A: 20→25m²", "Resize Office B: 20→25m²", "Resize Office C: 15→25m²"],
+      "affectedItems": ["Office A", "Office B", "Office C"]
+    }
+  ]
+}
+
+PRINCIPLES:
+- Offer 2-3 distinct interpretations when request is ambiguous
+- Always include numbers and specifics ("8 groups", "25m²", "10 per group")
+- Use actionSummary to give a complete picture in one sentence
+- Highlight ALL action verbs with **bold** markdown
+- Keep it concise but complete`;

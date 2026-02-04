@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useProjectStore, useUIStore } from '@/stores';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -6,9 +7,12 @@ import { Textarea } from '@/components/ui/textarea';
 import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Trash2, X, Layers } from 'lucide-react';
+import { Trash2, X, Layers, Split, Percent, Merge } from 'lucide-react';
 import { GROUP_COLORS } from '@/types';
 import { toast } from 'sonner';
+import { SplitGroupEqualDialog } from './SplitGroupEqualDialog';
+import { SplitGroupProportionDialog } from './SplitGroupProportionDialog';
+import { MergeGroupAreasDialog } from './MergeGroupAreasDialog';
 
 export function GroupInspector() {
   const groups = useProjectStore((s) => s.groups);
@@ -19,6 +23,11 @@ export function GroupInspector() {
 
   const selectedGroupIds = useUIStore((s) => s.selectedGroupIds);
   const selectGroups = useUIStore((s) => s.selectGroups);
+
+  // Dialog states
+  const [showSplitEqualDialog, setShowSplitEqualDialog] = useState(false);
+  const [showSplitProportionDialog, setShowSplitProportionDialog] = useState(false);
+  const [showMergeAreasDialog, setShowMergeAreasDialog] = useState(false);
 
   // No selection
   if (selectedGroupIds.length === 0) {
@@ -155,7 +164,51 @@ export function GroupInspector() {
 
             <Separator />
 
-            {/* Actions */}
+            {/* Group Actions */}
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground">Group Actions</Label>
+              
+              {/* Split actions - only show if group has 2+ members */}
+              {memberDetails.length >= 2 && (
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full justify-start"
+                    onClick={() => setShowSplitEqualDialog(true)}
+                  >
+                    <Split className="h-4 w-4 mr-2" />
+                    Split into Equal Groups
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full justify-start"
+                    onClick={() => setShowSplitProportionDialog(true)}
+                  >
+                    <Percent className="h-4 w-4 mr-2" />
+                    Split by Proportion
+                  </Button>
+                </>
+              )}
+
+              {/* Merge action - only show if group has 1+ members */}
+              {memberDetails.length >= 1 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full justify-start"
+                  onClick={() => setShowMergeAreasDialog(true)}
+                >
+                  <Merge className="h-4 w-4 mr-2" />
+                  Merge All Areas
+                </Button>
+              )}
+            </div>
+
+            <Separator />
+
+            {/* Danger Zone */}
             <Button
               variant="destructive"
               size="sm"
@@ -221,6 +274,23 @@ export function GroupInspector() {
           </TabsContent>
         </ScrollArea>
       </Tabs>
+
+      {/* Dialogs */}
+      <SplitGroupEqualDialog
+        open={showSplitEqualDialog}
+        onOpenChange={setShowSplitEqualDialog}
+        group={selectedGroup}
+      />
+      <SplitGroupProportionDialog
+        open={showSplitProportionDialog}
+        onOpenChange={setShowSplitProportionDialog}
+        group={selectedGroup}
+      />
+      <MergeGroupAreasDialog
+        open={showMergeAreasDialog}
+        onOpenChange={setShowMergeAreasDialog}
+        group={selectedGroup}
+      />
     </div>
   );
 }

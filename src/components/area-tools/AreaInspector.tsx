@@ -4,7 +4,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
 import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
@@ -29,7 +28,9 @@ import { SplitDialog } from './SplitDialog';
 import { SplitEqualDialog } from './SplitEqualDialog';
 import { SplitByAreasDialog } from './SplitByAreasDialog';
 import { SplitByProportionDialog } from './SplitByProportionDialog';
+import { NotesCard } from './NotesCard';
 import { toast } from 'sonner';
+import type { NoteSource } from '@/types';
 
 export function AreaInspector() {
   const nodes = useProjectStore((s) => s.nodes);
@@ -41,6 +42,9 @@ export function AreaInspector() {
   const mergeNodes = useProjectStore((s) => s.mergeNodes);
   const assignToGroup = useProjectStore((s) => s.assignToGroup);
   const mergeToSingleUnit = useProjectStore((s) => s.mergeToSingleUnit);
+  const addNoteToArea = useProjectStore((s) => s.addNoteToArea);
+  const updateNote = useProjectStore((s) => s.updateNote);
+  const deleteNote = useProjectStore((s) => s.deleteNote);
 
   const selectedNodeIds = useUIStore((s) => s.selectedNodeIds);
   const inspectorTab = useUIStore((s) => s.inspectorTab);
@@ -432,26 +436,22 @@ export function AreaInspector() {
             </div>
           </TabsContent>
 
-          <TabsContent value="notes" className="p-4 space-y-4 mt-0">
-            <div className="space-y-1.5">
-              <Label htmlFor="userNote" className="text-xs">Your Notes</Label>
-              <Textarea
-                id="userNote"
-                value={selectedNode.userNote || ''}
-                onChange={(e) => updateNode(selectedNode.id, { userNote: e.target.value })}
-                placeholder="Add notes about this area..."
-                rows={4}
-              />
-            </div>
-
-            {selectedNode.aiNote && (
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">AI Notes</Label>
-                <div className="p-3 bg-muted rounded-md text-sm">
-                  {selectedNode.aiNote}
-                </div>
-              </div>
-            )}
+          <TabsContent value="notes" className="p-4 mt-0">
+            <NotesCard
+              notes={selectedNode.notes || []}
+              onAddNote={(source: NoteSource, content: string) => {
+                addNoteToArea(selectedNode.id, { source, content });
+                toast.success('Note added');
+              }}
+              onUpdateNote={(noteId: string, content: string) => {
+                updateNote('area', selectedNode.id, noteId, content);
+                toast.success('Note updated');
+              }}
+              onDeleteNote={(noteId: string) => {
+                deleteNote('area', selectedNode.id, noteId);
+                toast.success('Note deleted');
+              }}
+            />
           </TabsContent>
         </ScrollArea>
       </Tabs>

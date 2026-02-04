@@ -13,6 +13,7 @@ import type {
   CreateGroupInput,
   UpdateGroupInput,
   AreaNodeDerived,
+  Note,
 } from '@/types';
 import { GROUP_COLORS } from '@/types';
 import { useHistoryStore } from './historyStore';
@@ -75,6 +76,11 @@ interface ProjectState {
   assignToGroup: (groupId: UUID, nodeIds: UUID[]) => void;
   removeFromGroup: (groupId: UUID, nodeIds: UUID[]) => void;
   
+  // Group Split/Merge Actions
+  splitGroupEqual: (groupId: UUID, parts: number, nameSuffix?: string) => UUID[];
+  splitGroupByProportion: (groupId: UUID, proportions: Array<{ name: string; percent: number }>) => UUID[];
+  mergeGroupAreas: (groupId: UUID, newAreaName?: string) => UUID | null;
+  
   // Actions - Notes
   addNoteToArea: (areaId: UUID, note: { source: 'brief' | 'ai' | 'user'; content: string; reason?: string }) => UUID | null;
   addNoteToGroup: (groupId: UUID, note: { source: 'brief' | 'ai' | 'user'; content: string; reason?: string }) => UUID | null;
@@ -86,6 +92,7 @@ interface ProjectState {
   setGroupSizeOverride: (groupId: string, size: { width?: number; height?: number }) => void;
   clearGroupSizeOverride: (groupId: string) => void;
   setAreaOffset: (areaId: string, x: number, y: number) => void;
+  setAreaOffsets: (offsets: Record<string, { x: number; y: number }>) => void;
   clearAreaOffset: (areaId: string) => void;
   clearAreaOffsets: (areaIds: string[]) => void;
   addComment: (x: number, y: number, text?: string) => string;
@@ -110,6 +117,65 @@ interface ProjectState {
 
 function now(): string {
   return new Date().toISOString();
+}
+
+// Shift a hex color's hue by a given amount (0-360)
+function shiftHue(hexColor: string, shift: number): string {
+  // Convert hex to RGB
+  const hex = hexColor.replace('#', '');
+  const r = parseInt(hex.substring(0, 2), 16) / 255;
+  const g = parseInt(hex.substring(2, 4), 16) / 255;
+  const b = parseInt(hex.substring(4, 6), 16) / 255;
+
+  // Convert RGB to HSL
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  let h = 0;
+  let s = 0;
+
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r: h = ((g - b) / d + (g < b ? 6 : 0)) / 6; break;
+      case g: h = ((b - r) / d + 2) / 6; break;
+      case b: h = ((r - g) / d + 4) / 6; break;
+    }
+  }
+
+  // Shift hue
+  h = (h + shift / 360) % 1;
+  if (h < 0) h += 1;
+
+  // Convert HSL back to RGB
+  const hue2rgb = (p: number, q: number, t: number) => {
+    if (t < 0) t += 1;
+    if (t > 1) t -= 1;
+    if (t < 1/6) return p + (q - p) * 6 * t;
+    if (t < 1/2) return q;
+    if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+    return p;
+  };
+
+  let r2: number, g2: number, b2: number;
+  if (s === 0) {
+    r2 = g2 = b2 = l;
+  } else {
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    r2 = hue2rgb(p, q, h + 1/3);
+    g2 = hue2rgb(p, q, h);
+    b2 = hue2rgb(p, q, h - 1/3);
+  }
+
+  // Convert back to hex
+  const toHex = (c: number) => {
+    const hex = Math.round(c * 255).toString(16);
+    return hex.length === 1 ? '0' + hex : hex;
+  };
+
+  return `#${toHex(r2)}${toHex(g2)}${toHex(b2)}`;
 }
 
 function createInitialState(): Pick<ProjectState, 'meta' | 'rawInputs' | 'nodes' | 'groups' | 'boardLayout'> {
@@ -174,13 +240,43 @@ export const useProjectStore = create<ProjectState>()(
       const id = uuidv4();
       const timestamp = now();
       
+      // Build notes array from input notes
+      const notes: Note[] = [];
+      if (input.briefNote) {
+        notes.push({
+          id: uuidv4(),
+          source: 'brief',
+          content: input.briefNote,
+          createdAt: timestamp,
+          modifiedAt: timestamp,
+        });
+      }
+      if (input.aiNote) {
+        notes.push({
+          id: uuidv4(),
+          source: 'ai',
+          content: input.aiNote,
+          createdAt: timestamp,
+          modifiedAt: timestamp,
+        });
+      }
+      if (input.userNote) {
+        notes.push({
+          id: uuidv4(),
+          source: 'user',
+          content: input.userNote,
+          createdAt: timestamp,
+          modifiedAt: timestamp,
+        });
+      }
+      
       set((state) => {
         state.nodes[id] = {
           id,
           name: input.name,
           areaPerUnit: input.areaPerUnit,
           count: input.count,
-          notes: [], // New notes array
+          notes, // Populated notes array
           lockedFields: [],
           createdAt: timestamp,
           modifiedAt: timestamp,
@@ -695,6 +791,276 @@ export const useProjectStore = create<ProjectState>()(
     },
 
     // ==========================================
+    // GROUP SPLIT/MERGE ACTIONS
+    // ==========================================
+
+    /**
+     * Split a group into N equal parts.
+     * Creates N copies of the group, each with the same areas but counts divided by N.
+     * Example: Living/bedroom 80×30m² split into 8 → 8 groups each with Living/bedroom 10×30m²
+     */
+    splitGroupEqual: (groupId, parts, nameSuffix = 'Unit') => {
+      const group = get().groups[groupId];
+      if (!group || parts < 2) return [];
+
+      const memberNodes = group.members.map(id => get().nodes[id]).filter(Boolean);
+      if (memberNodes.length === 0) return [];
+
+      const timestamp = now();
+      const baseColor = group.color;
+      const newGroupIds: string[] = [];
+
+      // For each area, we need to split its count into N parts
+      // Calculate how counts will be distributed
+      const countDistributions: Record<string, number[]> = {};
+      for (const node of memberNodes) {
+        const baseCount = Math.floor(node.count / parts);
+        const remainder = node.count % parts;
+        
+        // Distribute: first 'remainder' groups get one extra
+        countDistributions[node.id] = Array.from({ length: parts }, (_, i) => 
+          baseCount + (i < remainder ? 1 : 0)
+        );
+      }
+
+      set((state) => {
+        // Create N new groups with split areas
+        for (let i = 0; i < parts; i++) {
+          const newGroupId = uuidv4();
+          newGroupIds.push(newGroupId);
+
+          // Shift hue for visual distinction
+          const hueShift = (i * 360 / parts) % 360;
+          const newColor = shiftHue(baseColor, hueShift);
+
+          const newMemberIds: string[] = [];
+
+          // For each original area, create a copy with split count
+          for (const node of memberNodes) {
+            const splitCount = countDistributions[node.id][i];
+            
+            // Skip if this split has 0 count
+            if (splitCount <= 0) continue;
+
+            const newNodeId = uuidv4();
+            newMemberIds.push(newNodeId);
+
+            state.nodes[newNodeId] = {
+              id: newNodeId,
+              name: node.name, // Keep same name
+              areaPerUnit: node.areaPerUnit,
+              count: splitCount,
+              notes: node.notes ? [...node.notes] : [], // Copy notes
+              lockedFields: [],
+              createdAt: timestamp,
+              modifiedAt: timestamp,
+              createdBy: 'user',
+            };
+          }
+
+          // Create the new group
+          state.groups[newGroupId] = {
+            id: newGroupId,
+            name: `${group.name} - ${nameSuffix} ${i + 1}`,
+            color: newColor,
+            members: newMemberIds,
+            notes: group.notes ? [...group.notes] : [],
+            createdAt: timestamp,
+            modifiedAt: timestamp,
+          };
+        }
+
+        // Delete original nodes
+        for (const node of memberNodes) {
+          delete state.nodes[node.id];
+        }
+
+        // Delete original group
+        delete state.groups[groupId];
+
+        state.meta.modifiedAt = timestamp;
+      });
+
+      const finalState = get();
+      useHistoryStore.getState().snapshot('split_group_equal', `Split "${group.name}" into ${parts} equal groups`, {
+        nodes: finalState.nodes,
+        groups: finalState.groups,
+      });
+
+      return newGroupIds;
+    },
+
+    /**
+     * Split a group by proportions.
+     * Creates copies of the group where each copy has area counts scaled to the proportion.
+     * Example: Living/bedroom 80×30m² with (10%, 30%, 60%) → 8, 24, 48 units
+     */
+    splitGroupByProportion: (groupId, proportions) => {
+      const group = get().groups[groupId];
+      if (!group || proportions.length < 2) return [];
+
+      const memberNodes = group.members.map(id => get().nodes[id]).filter(Boolean);
+      if (memberNodes.length === 0) return [];
+
+      // Normalize proportions to fractions
+      const totalPercent = proportions.reduce((sum, p) => sum + p.percent, 0);
+      const fractions = proportions.map(p => p.percent / totalPercent);
+
+      const timestamp = now();
+      const baseColor = group.color;
+      const newGroupIds: string[] = [];
+
+      // For each area, calculate count distribution by proportion
+      const countDistributions: Record<string, number[]> = {};
+      for (const node of memberNodes) {
+        const distribution: number[] = [];
+        let remaining = node.count;
+
+        // Allocate counts, ensuring we use all units
+        for (let i = 0; i < fractions.length; i++) {
+          if (i === fractions.length - 1) {
+            // Last group gets whatever remains
+            distribution.push(remaining);
+          } else {
+            const allocated = Math.round(node.count * fractions[i]);
+            distribution.push(Math.min(allocated, remaining));
+            remaining -= distribution[i];
+          }
+        }
+
+        countDistributions[node.id] = distribution;
+      }
+
+      set((state) => {
+        // Create groups for each proportion
+        for (let i = 0; i < proportions.length; i++) {
+          const newGroupId = uuidv4();
+          newGroupIds.push(newGroupId);
+
+          // Shift hue for visual distinction
+          const hueShift = (i * 360 / proportions.length) % 360;
+          const newColor = shiftHue(baseColor, hueShift);
+
+          const newMemberIds: string[] = [];
+
+          // For each original area, create a copy with proportional count
+          for (const node of memberNodes) {
+            const splitCount = countDistributions[node.id][i];
+            
+            // Skip if this split has 0 count
+            if (splitCount <= 0) continue;
+
+            const newNodeId = uuidv4();
+            newMemberIds.push(newNodeId);
+
+            state.nodes[newNodeId] = {
+              id: newNodeId,
+              name: node.name,
+              areaPerUnit: node.areaPerUnit,
+              count: splitCount,
+              notes: node.notes ? [...node.notes] : [],
+              lockedFields: [],
+              createdAt: timestamp,
+              modifiedAt: timestamp,
+              createdBy: 'user',
+            };
+          }
+
+          // Create the new group
+          state.groups[newGroupId] = {
+            id: newGroupId,
+            name: proportions[i].name,
+            color: newColor,
+            members: newMemberIds,
+            notes: group.notes ? [...group.notes] : [],
+            createdAt: timestamp,
+            modifiedAt: timestamp,
+          };
+        }
+
+        // Delete original nodes
+        for (const node of memberNodes) {
+          delete state.nodes[node.id];
+        }
+
+        // Delete original group
+        delete state.groups[groupId];
+
+        state.meta.modifiedAt = timestamp;
+      });
+
+      const finalState = get();
+      useHistoryStore.getState().snapshot('split_group_proportion', `Split "${group.name}" by proportion`, {
+        nodes: finalState.nodes,
+        groups: finalState.groups,
+      });
+
+      return newGroupIds;
+    },
+
+    mergeGroupAreas: (groupId, newAreaName) => {
+      const group = get().groups[groupId];
+      if (!group) return null;
+
+      const memberNodes = group.members.map(id => get().nodes[id]).filter(Boolean);
+      if (memberNodes.length === 0) return null;
+
+      // Calculate merged values
+      const totalCount = memberNodes.reduce((sum, n) => sum + n.count, 0);
+      const totalArea = memberNodes.reduce((sum, n) => sum + n.areaPerUnit * n.count, 0);
+      const avgAreaPerUnit = totalArea / totalCount;
+      const mergedName = newAreaName || group.name;
+
+      // Collect all notes from member nodes
+      const allNotes = memberNodes.flatMap(n => n.notes || []);
+
+      const newId = uuidv4();
+      const timestamp = now();
+
+      set((state) => {
+        // Create merged node
+        state.nodes[newId] = {
+          id: newId,
+          name: mergedName,
+          areaPerUnit: avgAreaPerUnit,
+          count: totalCount,
+          notes: [
+            {
+              id: uuidv4(),
+              source: 'user',
+              content: `Merged from group "${group.name}": ${memberNodes.map(n => `${n.name} (${n.count}×${n.areaPerUnit}m²)`).join(', ')}`,
+              createdAt: timestamp,
+              modifiedAt: timestamp,
+            },
+            ...allNotes
+          ],
+          lockedFields: [],
+          createdAt: timestamp,
+          modifiedAt: timestamp,
+          createdBy: 'user',
+        };
+
+        // Delete original nodes
+        for (const node of memberNodes) {
+          delete state.nodes[node.id];
+        }
+
+        // Delete the group
+        delete state.groups[groupId];
+
+        state.meta.modifiedAt = timestamp;
+      });
+
+      const finalState = get();
+      useHistoryStore.getState().snapshot('merge_group_areas', `Merged group "${group.name}" into single area`, {
+        nodes: finalState.nodes,
+        groups: finalState.groups,
+      });
+
+      return newId;
+    },
+
+    // ==========================================
     // NOTE ACTIONS
     // ==========================================
 
@@ -809,6 +1175,14 @@ export const useProjectStore = create<ProjectState>()(
     setAreaOffset: (areaId, x, y) => {
       set((state) => {
         state.boardLayout.areaOffsets[areaId] = { x, y };
+      });
+    },
+
+    setAreaOffsets: (offsets) => {
+      set((state) => {
+        for (const [id, offset] of Object.entries(offsets)) {
+          state.boardLayout.areaOffsets[id] = offset;
+        }
       });
     },
 
