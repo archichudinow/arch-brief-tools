@@ -12,6 +12,9 @@ type InspectorTab = 'details' | 'notes';
 /** Detail level for AI program generation */
 export type DetailLevel = 'abstract' | 'standard' | 'detailed';
 
+/** Expand depth for recursive unfold (1-3) */
+export type ExpandDepth = 1 | 2 | 3;
+
 interface UIState {
   // Selection
   selectedNodeIds: UUID[];
@@ -32,6 +35,7 @@ interface UIState {
   
   // AI settings
   detailLevel: DetailLevel;
+  expandDepth: ExpandDepth;
   
   // Actions - Selection
   selectNodes: (ids: UUID[], append?: boolean) => void;
@@ -55,6 +59,7 @@ interface UIState {
   
   // Actions - AI settings
   setDetailLevel: (level: DetailLevel) => void;
+  setExpandDepth: (depth: ExpandDepth) => void;
 }
 
 // ============================================
@@ -74,6 +79,7 @@ export const useUIStore = create<UIState>()(
     rightPanelCollapsed: false,
     isAddingComment: false,
     detailLevel: 'standard',
+    expandDepth: 2,
 
     // Selection actions
     selectNodes: (ids, append = false) => {

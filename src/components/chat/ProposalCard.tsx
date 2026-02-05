@@ -48,6 +48,7 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
     switch (accepted.type) {
       case 'create_areas': {
         console.log('Creating areas:', accepted.areas);
+        console.log('Areas with groupHints:', accepted.areas.map(a => ({ name: a.name, groupHint: a.groupHint })));
         snapshot('ai-create-areas', `AI: Create ${accepted.areas.length} areas`, { nodes, groups });
         
         // Track created nodes by their groupHint for auto-grouping
@@ -74,12 +75,16 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
           }
         });
         
+        console.log('Nodes by group:', nodesByGroup);
+        
         // Auto-create groups and assign nodes
         Object.entries(nodesByGroup).forEach(([groupName, nodeIds]) => {
           if (nodeIds.length > 0) {
-            console.log('Auto-creating group:', groupName, 'with nodes:', nodeIds);
+            console.log(`Creating group "${groupName}" with ${nodeIds.length} nodes:`, nodeIds);
             const groupId = createGroup({ name: groupName });
             assignToGroup(groupId, nodeIds);
+          } else {
+            console.warn(`Skipping empty group "${groupName}"`);
           }
         });
         break;
@@ -149,9 +154,13 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
       case 'create_groups':
         snapshot('ai-create-groups', `AI: Create ${accepted.groups.length} groups`, { nodes, groups });
         accepted.groups.forEach((g) => {
-          const groupId = createGroup({ name: g.name, color: g.color });
+          // Only create group if it has members
           if (g.memberNodeIds.length > 0) {
+            console.log(`Creating group "${g.name}" with ${g.memberNodeIds.length} members`);
+            const groupId = createGroup({ name: g.name, color: g.color });
             assignToGroup(groupId, g.memberNodeIds);
+          } else {
+            console.warn(`Skipping empty group "${g.name}" - no members`);
           }
         });
         break;

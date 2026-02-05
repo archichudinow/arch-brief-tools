@@ -4,7 +4,58 @@
  */
 
 // ============================================
-// GENERATE MODE - For simple prompts
+// GENERATE MODE - For simple prompts (abstract level)
+// ============================================
+
+export const GENERATE_ABSTRACT_PROMPT = `You are an architectural programmer. Generate HIGH-LEVEL ZONES for a building program.
+
+USER REQUEST:
+{userInput}
+
+CRITICAL INSTRUCTION:
+Generate ONLY 4-8 major functional ZONES, NOT individual rooms.
+Each zone will be further broken down in subsequent steps.
+
+EXAMPLES OF CORRECT ZONE NAMING:
+✓ "Guest Room Wing" (not "Standard Room", "Suite", "Bathroom")
+✓ "Back-of-House Facilities" (not "Kitchen", "Storage", "Loading Dock")
+✓ "Public Amenities Zone" (not "Restaurant", "Bar", "Lounge")
+✓ "Outdoor Recreation Area" (not "Pool", "Tennis Court", "Garden")
+✓ "Parking & Arrival" (not "Parking Space x50")
+
+WRONG (TOO DETAILED):
+✗ "Reception Lobby", "Conference Room", "Private Office", "Restroom"
+
+TYPOLOGY ZONE STANDARDS:
+- Hotel: Guest Rooms Wing (60-70%), Public/Lobby Zone (10-15%), F&B Zone (10-15%), Back-of-House (10-15%), Outdoor Amenities (varies)
+- Office: Work Zone (60-70%), Meeting Zone (15-20%), Support Zone (15-20%)
+- Residential: Units Zone (65-75%), Common Zone (15-25%), Services Zone (10-15%)
+
+OUTPUT FORMAT (JSON only):
+{
+  "interpretation": "How I understood the request",
+  "buildingType": "hotel | office | residential | retail | cultural | mixed",
+  "targetArea": 10000,
+  "areas": [
+    { "name": "Guest Room Wing", "percentage": 55, "groupHint": "Accommodation", "aiNote": "All guest accommodations - to be detailed" },
+    { "name": "Public Lobby & Arrival Zone", "percentage": 10, "groupHint": "Public", "aiNote": "Entry experience - to be detailed" },
+    { "name": "Food & Beverage Zone", "percentage": 12, "groupHint": "F&B", "aiNote": "All restaurants/bars - to be detailed" },
+    { "name": "Back-of-House Facilities", "percentage": 13, "groupHint": "BOH", "aiNote": "Service areas - to be detailed" },
+    { "name": "Outdoor Amenities Area", "percentage": 10, "groupHint": "Outdoor", "aiNote": "Pool, gardens, terraces - to be detailed" }
+  ],
+  "detectedGroups": [],
+  "assumptions": ["Generated high-level zones for recursive detailing"],
+  "projectContext": "5-star hotel in Dubai with premium amenities"
+}
+
+REMEMBER:
+- Generate 4-8 ZONES only, not individual rooms
+- Percentages sum to 100
+- Each zone must be broad enough to contain multiple sub-spaces
+`;
+
+// ============================================
+// GENERATE MODE - For simple prompts (detailed level)
 // ============================================
 
 export const GENERATE_PROMPT = `You are an architectural programmer. Generate a building program based on user requirements.
@@ -208,6 +259,59 @@ export const INVALID_INPUT_RESPONSE = {
     'Or describe what you want to create (e.g., "Create an office for 50 people")'
   ],
 };
+
+// ============================================
+// UNFOLD AREA PROMPT - For recursive detail expansion
+// ============================================
+
+export const UNFOLD_AREA_PROMPT = `You are an architectural programmer. Analyze this area and decide if it should be broken down into more specific sub-areas.
+
+PARENT AREA:
+Name: {areaName}
+Area: {areaSize} m²
+Context: {projectContext}
+Current depth: {currentDepth}
+
+INSTRUCTIONS:
+1. Determine if this area is TERMINAL (no further breakdown needed) or should UNFOLD into sub-areas
+2. An area is TERMINAL if:
+   - It's a single-purpose room (toilet, closet, individual office, hotel room)
+   - It's naturally large but specific (football field, concert hall, warehouse floor)
+   - It's already at maximum practical detail
+   - Area is < 20m² and is a single room type
+3. An area should UNFOLD if:
+   - It's abstract/categorical (e.g., "Indoor Facilities", "Support Areas", "Amenities")
+   - It's large (> 200m²) AND represents multiple spaces
+   - Breaking it down would add clarity to the program
+
+SIZING GUIDELINES for unfold:
+- Sub-areas should sum to approximately the parent area
+- Use percentages that sum to 100%
+- Typical sub-area count: 3-8 for unfold
+
+TERMINAL AREA EXAMPLES (do NOT unfold):
+- "Football Field" (2000m²) - specific sports venue
+- "Hotel Room" (30m²) - individual unit
+- "Restroom" (15m²) - single function
+- "Storage Room" (20m²) - utility space
+- "Parking Space" (12.5m²) - single unit
+- "Conference Hall" (500m²) - large but singular purpose
+
+UNFOLD EXAMPLES (SHOULD unfold):
+- "Indoor Facilities" (5000m²) → Gym, Changing Rooms, Equipment Storage, etc.
+- "Support Areas" (1500m²) → Admin Office, Storage, Maintenance, Staff Room
+- "F&B Areas" (800m²) → Restaurant, Café, Kitchen, Storage
+- "Amenities" (600m²) → Gym, Lounge, Game Room
+
+OUTPUT FORMAT (JSON only):
+{
+  "decision": "terminal" | "unfold",
+  "reasoning": "Why this decision was made",
+  "subAreas": [
+    // Only if decision is "unfold"
+    { "name": "Sub Area Name", "percentage": 40, "aiNote": "Brief explanation" }
+  ]
+}`;
 
 // ============================================
 // HELPER FUNCTIONS

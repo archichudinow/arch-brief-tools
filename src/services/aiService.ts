@@ -35,9 +35,11 @@ import {
 } from './briefAnalyzer';
 import {
   GENERATE_PROMPT,
+  GENERATE_ABSTRACT_PROMPT,
   EXTRACT_TOLERANT_PROMPT,
   RECONCILIATION_PROMPT,
   INVALID_INPUT_RESPONSE,
+  UNFOLD_AREA_PROMPT,
   buildPrompt,
   formatAreasForReconciliation,
   GROUP_COLORS,
@@ -1011,8 +1013,17 @@ function buildParsedBrief(
   };
 }
 
-export async function parseBrief(briefText: string): Promise<ParsedBrief & { inputClassification?: InputClassification }> {
+export interface ParseBriefOptions {
+  /** Generate abstract zones instead of detailed areas (for recursive unfold) */
+  useAbstract?: boolean;
+}
+
+export async function parseBrief(
+  briefText: string,
+  options: ParseBriefOptions = {}
+): Promise<ParsedBrief & { inputClassification?: InputClassification }> {
   const apiKey = getApiKey();
+  const { useAbstract = false } = options;
   
   // Step 1: Analyze input to determine strategy
   const classification = analyzeInput(briefText);
@@ -1021,6 +1032,7 @@ export async function parseBrief(briefText: string): Promise<ParsedBrief & { inp
     quality: classification.quality,
     strategy: classification.strategy,
     confidence: classification.confidence,
+    useAbstract,
   });
   
   // Step 2: Handle based on strategy
@@ -1033,9 +1045,9 @@ export async function parseBrief(briefText: string): Promise<ParsedBrief & { inp
       };
     
     case 'generate':
-      console.log('Using GENERATE strategy for prompt input');
+      console.log(`Using GENERATE strategy (${useAbstract ? 'abstract' : 'detailed'}) for prompt input`);
       return {
-        ...(await parseWithGenerateStrategy(classification.cleanedText, apiKey)),
+        ...(await parseWithGenerateStrategy(classification.cleanedText, apiKey, useAbstract)),
         inputClassification: classification,
       };
     
@@ -1060,10 +1072,11 @@ export async function parseBrief(briefText: string): Promise<ParsedBrief & { inp
 // STRATEGY: GENERATE (for prompts)
 // ============================================
 
-async function parseWithGenerateStrategy(promptText: string, apiKey: string): Promise<ParsedBrief> {
-  console.log('Starting generate mode parsing...');
+async function parseWithGenerateStrategy(promptText: string, apiKey: string, useAbstract = false): Promise<ParsedBrief> {
+  console.log(`Starting ${useAbstract ? 'abstract' : 'detailed'} generate mode parsing...`);
   
-  const prompt = buildPrompt(GENERATE_PROMPT, { userInput: promptText });
+  const promptTemplate = useAbstract ? GENERATE_ABSTRACT_PROMPT : GENERATE_PROMPT;
+  const prompt = buildPrompt(promptTemplate, { userInput: promptText });
   
   const response = await fetch(OPENAI_API_URL, {
     method: 'POST',
@@ -1641,4 +1654,232 @@ export function generateProjectSummary(
     return `${projectContext}\n\n${summary}`;
   }
   return summary;
+}
+
+// ============================================
+// RECURSIVE UNFOLD SYSTEM
+// ============================================
+
+export type DetailDepth = 1 | 2 | 3;
+
+export interface UnfoldableArea {
+  id: string;
+  name: string;
+  areaPerUnit: number;
+  count: number;
+  groupHint?: string;
+  aiNote?: string;
+  depth: number;
+  parentId: string | null;
+  children?: UnfoldableArea[];
+  isTerminal?: boolean;
+}
+
+export interface UnfoldResult {
+  decision: 'terminal' | 'unfold';
+  reasoning: string;
+  subAreas?: Array<{
+    name: string;
+    percentage: number;
+    aiNote?: string;
+  }>;
+}
+
+/**
+ * Determines if an area should be unfolded based on heuristics
+ * Quick check before calling AI to save API calls
+ */
+function shouldConsiderUnfold(area: UnfoldableArea, maxDepth: number): boolean {
+  // Already at max depth
+  if (area.depth >= maxDepth) return false;
+  
+  // Too small to unfold meaningfully
+  if (area.areaPerUnit < 30) return false;
+  
+  // Terminal keywords that indicate specific single-purpose spaces
+  const terminalKeywords = [
+    'toilet', 'restroom', 'wc', 'bathroom', 'lavatory',
+    'closet', 'locker',
+    'parking space', 'parking spot',
+    'hotel room', 'guest room', 'bedroom',
+    'office room', 'private office',
+    'individual', 'single',
+    'elevator', 'lift', 'escalator', 'stair',
+    'field', 'pitch', 'court', 'pool', 'track',
+    'corridor', 'hallway', 'passage',
+  ];
+  
+  const nameLower = area.name.toLowerCase();
+  if (terminalKeywords.some(kw => nameLower.includes(kw))) {
+    return false;
+  }
+  
+  // Abstract keywords that usually need unfolding
+  const abstractKeywords = [
+    'area', 'zone', 'section', 'wing', 'block',
+    'facilities', 'amenities', 'services',
+    'spaces', 'rooms', 'quarters',
+    'department', 'division',
+    'indoor', 'outdoor',
+    'support', 'back-of-house', 'boh',
+    'public', 'private',
+    'mixed', 'multi',
+  ];
+  
+  // Large areas (> 200m²) or abstract names should consider unfolding
+  const isLarge = area.areaPerUnit > 200;
+  const isAbstract = abstractKeywords.some(kw => nameLower.includes(kw));
+  
+  return isLarge || isAbstract;
+}
+
+/**
+ * Call AI to decide if area should unfold and get sub-areas
+ */
+async function unfoldSingleArea(
+  area: UnfoldableArea,
+  projectContext: string,
+  apiKey: string
+): Promise<UnfoldResult> {
+  const prompt = buildPrompt(UNFOLD_AREA_PROMPT, {
+    areaName: area.name,
+    areaSize: area.areaPerUnit.toString(),
+    projectContext: projectContext || 'General building',
+    currentDepth: area.depth.toString(),
+  });
+  
+  const response = await fetch(OPENAI_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: prompt }],
+      response_format: { type: 'json_object' },
+      temperature: 0.5,
+    }),
+  });
+  
+  if (!response.ok) {
+    console.warn(`Unfold API error for "${area.name}": ${response.status}`);
+    return { decision: 'terminal', reasoning: 'API error - treating as terminal' };
+  }
+  
+  const data = await response.json();
+  const content = data.choices?.[0]?.message?.content || '';
+  
+  try {
+    const parsed = JSON.parse(content) as UnfoldResult;
+    return parsed;
+  } catch {
+    console.warn(`Failed to parse unfold response for "${area.name}"`);
+    return { decision: 'terminal', reasoning: 'Parse error - treating as terminal' };
+  }
+}
+
+/**
+ * Recursively unfold areas up to specified depth
+ * Returns tree structure with children populated
+ */
+export async function recursiveUnfold(
+  areas: Array<{
+    name: string;
+    areaPerUnit: number;
+    count: number;
+    groupHint?: string;
+    aiNote?: string;
+  }>,
+  projectContext: string,
+  maxDepth: DetailDepth = 2,
+  onProgress?: (processed: number, total: number) => void
+): Promise<UnfoldableArea[]> {
+  const apiKey = getApiKey();
+  let idCounter = 0;
+  
+  // Convert initial areas to UnfoldableArea format
+  const rootAreas: UnfoldableArea[] = areas.map(a => ({
+    ...a,
+    id: `area-${++idCounter}`,
+    depth: 1,
+    parentId: null,
+    children: [],
+    isTerminal: false,
+  }));
+  
+  // Queue of areas to potentially unfold
+  const queue: UnfoldableArea[] = [...rootAreas];
+  let processed = 0;
+  const totalInitial = queue.length;
+  
+  onProgress?.(0, totalInitial);
+  
+  while (queue.length > 0) {
+    const area = queue.shift()!;
+    processed++;
+    
+    // Check if we should consider unfolding
+    if (!shouldConsiderUnfold(area, maxDepth)) {
+      area.isTerminal = true;
+      onProgress?.(processed, totalInitial + queue.length);
+      continue;
+    }
+    
+    console.log(`[unfold] Analyzing "${area.name}" (${area.areaPerUnit}m²)...`);
+    
+    // Call AI to decide
+    const result = await unfoldSingleArea(area, projectContext, apiKey);
+    
+    if (result.decision === 'terminal' || !result.subAreas || result.subAreas.length === 0) {
+      area.isTerminal = true;
+      console.log(`[unfold]   → Terminal: ${result.reasoning}`);
+      onProgress?.(processed, totalInitial + queue.length);
+      continue;
+    }
+    
+    console.log(`[unfold]   → Unfolding into ${result.subAreas.length} sub-areas`);
+    
+    // Create child areas
+    const children: UnfoldableArea[] = result.subAreas.map(sub => {
+      const childArea = Math.round((sub.percentage / 100) * area.areaPerUnit);
+      return {
+        id: `area-${++idCounter}`,
+        name: sub.name,
+        areaPerUnit: childArea,
+        count: 1,
+        groupHint: area.name, // Use parent name as group hint
+        aiNote: sub.aiNote,
+        depth: area.depth + 1,
+        parentId: area.id,
+        children: [],
+        isTerminal: false,
+      };
+    });
+    
+    area.children = children;
+    
+    // Add children to queue for potential further unfolding
+    queue.push(...children);
+    onProgress?.(processed, totalInitial + queue.length);
+    
+    // Small delay to avoid rate limiting
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+  
+  console.log(`[unfold] Completed: processed ${processed} areas`);
+  
+  // Return root areas with tree structure intact
+  return rootAreas;
+}
+
+/**
+ * Map detail level to depth
+ */
+export function detailLevelToDepth(level: 'abstract' | 'standard' | 'detailed'): DetailDepth {
+  switch (level) {
+    case 'abstract': return 1;
+    case 'standard': return 2;
+    case 'detailed': return 3;
+  }
 }

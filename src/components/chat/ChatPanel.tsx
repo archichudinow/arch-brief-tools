@@ -182,9 +182,13 @@ export function ChatPanel() {
       );
       
       if (chatMode === 'agent' && isProgramRequest) {
-        console.log('Using formula-based generation');
+        // Extract total area from brief text (e.g., "8000 sqm", "10,000 m²", "5000m2")
+        const areaMatch = content.match(/(\d[\d,]*(?:\.\d+)?)\s*(?:sqm|m²|m2|square\s*met(?:er|re)s?)\b/i);
+        const extractedArea = areaMatch ? parseFloat(areaMatch[1].replace(/,/g, '')) : undefined;
         
-        const formulaResponse = await generateFormulaProgram(content);
+        console.log(`Using formula-based generation with depth ${expandDepth}, extracted area: ${extractedArea}`);
+        
+        const formulaResponse = await generateFormulaProgram(content, extractedArea, expandDepth);
         
         // Handle clarification needed
         if (formulaResponse.clarification_needed && formulaResponse.options) {
