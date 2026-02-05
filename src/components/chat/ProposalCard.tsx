@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { useChatStore, useProjectStore, useHistoryStore } from '@/stores';
 import type { Proposal } from '@/types';
-import { Check, X, Scissors, GitMerge, Plus, Pencil, FolderPlus, FolderInput, StickyNote, Copy, Percent, Combine } from 'lucide-react';
+import { Check, X, Scissors, GitMerge, Plus, Pencil, FolderPlus, FolderInput, StickyNote, Copy, Percent, Combine, Link } from 'lucide-react';
 
 interface ProposalCardProps {
   proposal: Proposal;
@@ -24,6 +24,7 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
   const splitGroupEqual = useProjectStore((s) => s.splitGroupEqual);
   const splitGroupByProportion = useProjectStore((s) => s.splitGroupByProportion);
   const mergeGroupAreas = useProjectStore((s) => s.mergeGroupAreas);
+  const splitNodeByQuantity = useProjectStore((s) => s.splitNodeByQuantity);
   const nodes = useProjectStore((s) => s.nodes);
   const groups = useProjectStore((s) => s.groups);
   
@@ -58,6 +59,10 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
             areaPerUnit: area.areaPerUnit,
             count: area.count,
             userNote: area.briefNote,
+            // Pass formula reasoning for traceability
+            formulaReasoning: area.formulaReasoning,
+            formulaConfidence: area.formulaConfidence,
+            formulaType: area.formulaType,
           });
           
           // Collect nodes by groupHint
@@ -96,6 +101,10 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
             name: split.name,
             areaPerUnit: split.areaPerUnit,
             count: split.count,
+            // Pass formula reasoning for traceability
+            formulaReasoning: split.formulaReasoning,
+            formulaConfidence: split.formulaConfidence,
+            formulaType: split.formulaType,
           });
           newNodeIds.push(newId);
         });
@@ -121,6 +130,14 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
           count: accepted.result.count,
         });
         break;
+      
+      case 'split_by_quantity': {
+        snapshot('ai-split-quantity', `AI: Split ${accepted.sourceName} by quantity (linked)`, { nodes, groups });
+        // This uses splitNodeByQuantity which creates linked instances automatically
+        const newIds = splitNodeByQuantity(accepted.sourceNodeId, accepted.quantities);
+        console.log('Created linked instances:', newIds);
+        break;
+      }
         
       case 'update_areas':
         snapshot('ai-update', `AI: Update ${accepted.updates.length} areas`, { nodes, groups });
@@ -228,6 +245,7 @@ function ProposalIcon({ type }: { type: Proposal['type'] }) {
   const icons: Record<Proposal['type'], React.ComponentType<{ className?: string }>> = {
     create_areas: Plus,
     split_area: Scissors,
+    split_by_quantity: Link,
     merge_areas: GitMerge,
     update_areas: Pencil,
     create_groups: FolderPlus,
@@ -248,6 +266,8 @@ function ProposalTitle({ proposal }: { proposal: Proposal }) {
       return <span>Create {proposal.areas?.length || 0} area{(proposal.areas?.length || 0) > 1 ? 's' : ''}</span>;
     case 'split_area':
       return <span>Split "{proposal.sourceName || 'area'}" into {proposal.splits?.length || 0} parts</span>;
+    case 'split_by_quantity':
+      return <span>Split "{proposal.sourceName || 'area'}" by quantity (×{proposal.quantities?.join(' + ×')})</span>;
     case 'merge_areas':
       return <span>Merge {proposal.sourceNames?.length || 0} areas into "{proposal.result?.name || 'merged'}"</span>;
     case 'update_areas':
@@ -274,9 +294,24 @@ function ProposalDetails({ proposal }: { proposal: Proposal }) {
     case 'create_areas':
       if (!proposal.areas?.length) return null;
       return (
-        <ul className="text-xs text-muted-foreground space-y-1">
+        <ul className="text-xs text-muted-foreground space-y-1.5">
           {proposal.areas.map((area, i) => (
-            <li key={i}>• {area.name}: {area.count} × {area.areaPerUnit}m²</li>
+            <li key={i} className="border-l-2 border-primary/20 pl-2">
+              <div className="flex items-center justify-between">
+                <span className="font-medium text-foreground">{area.name}</span>
+                <span>{(area.count * area.areaPerUnit).toLocaleString()} m²</span>
+              </div>
+              {area.formulaReasoning && (
+                <p className="text-[10px] text-muted-foreground/80 mt-0.5 italic">
+                  {area.formulaReasoning}
+                </p>
+              )}
+              {area.aiNote && !area.formulaReasoning && (
+                <p className="text-[10px] text-muted-foreground/80 mt-0.5 italic">
+                  {area.aiNote}
+                </p>
+              )}
+            </li>
           ))}
         </ul>
       );
@@ -284,9 +319,19 @@ function ProposalDetails({ proposal }: { proposal: Proposal }) {
     case 'split_area':
       if (!proposal.splits?.length) return null;
       return (
-        <ul className="text-xs text-muted-foreground space-y-1">
+        <ul className="text-xs text-muted-foreground space-y-1.5">
           {proposal.splits.map((split, i) => (
-            <li key={i}>• {split.name}: {split.count} × {split.areaPerUnit}m²</li>
+            <li key={i} className="border-l-2 border-primary/20 pl-2">
+              <div className="flex items-center justify-between">
+                <span className="font-medium text-foreground">{split.name}</span>
+                <span>{(split.count * split.areaPerUnit).toLocaleString()} m²</span>
+              </div>
+              {split.formulaReasoning && (
+                <p className="text-[10px] text-muted-foreground/80 mt-0.5 italic">
+                  {split.formulaReasoning}
+                </p>
+              )}
+            </li>
           ))}
         </ul>
       );
@@ -372,6 +417,23 @@ function ProposalDetails({ proposal }: { proposal: Proposal }) {
         <p className="text-xs text-muted-foreground">
           Combine all areas into: "{proposal.newAreaName || proposal.groupName}"
         </p>
+      );
+      
+    case 'split_by_quantity':
+      return (
+        <div className="text-xs text-muted-foreground space-y-1">
+          <p className="flex items-center gap-1">
+            <Link className="h-3 w-3 text-blue-500" />
+            <span>Results will be linked instances</span>
+          </p>
+          <ul className="space-y-0.5">
+            {proposal.quantities?.map((qty, i) => (
+              <li key={i} className="border-l-2 border-blue-300 pl-2">
+                {proposal.names?.[i] || `${proposal.sourceName} (${i + 1})`}: ×{qty}
+              </li>
+            ))}
+          </ul>
+        </div>
       );
       
     default:

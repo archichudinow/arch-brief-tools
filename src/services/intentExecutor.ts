@@ -76,6 +76,24 @@ export interface SplitAreaIntent {
 }
 
 /**
+ * Intent to split by quantity (count) - results remain linked instances
+ * Use this when splitting "Room A × 10" into "Room A × 3" + "Room A × 7"
+ * The physical room type stays the same, just distributed differently
+ */
+export interface SplitByQuantityIntent {
+  type: 'split_by_quantity';
+  /** UUID of area to split (must exist and have count >= 2) */
+  sourceNodeId: UUID;
+  /** Name of source (for display) */
+  sourceName: string;
+  /** Array of quantities to split into (must sum to source count) */
+  quantities: number[];
+  /** Optional new names for each split (defaults to "name (1)", "name (2)", etc) */
+  names?: string[];
+  message?: string;
+}
+
+/**
  * Intent to merge areas
  */
 export interface MergeAreasIntent {
@@ -125,6 +143,7 @@ export interface PassThroughIntent {
 export type AIIntent = 
   | CreateProgramIntent 
   | SplitAreaIntent 
+  | SplitByQuantityIntent
   | MergeAreasIntent
   | RedistributeIntent 
   | AdjustPercentIntent
@@ -179,6 +198,32 @@ export function validateIntent(
         errors.push('splits array cannot be empty');
       }
       break;
+
+    case 'split_by_quantity': {
+      if (!intent.sourceNodeId) {
+        errors.push('sourceNodeId is required');
+      } else if (!nodeIds.has(intent.sourceNodeId)) {
+        errors.push(`sourceNodeId "${intent.sourceNodeId}" does not exist`);
+      } else {
+        const node = existingNodes.find(n => n.id === intent.sourceNodeId);
+        if (node) {
+          if (node.count < 2) {
+            errors.push('source node must have count >= 2 for quantity split');
+          }
+          const total = intent.quantities.reduce((a, b) => a + b, 0);
+          if (total !== node.count) {
+            errors.push(`quantities sum (${total}) must equal source count (${node.count})`);
+          }
+          if (intent.quantities.some(q => q < 1)) {
+            errors.push('all quantities must be >= 1');
+          }
+        }
+      }
+      if (!intent.quantities || intent.quantities.length < 2) {
+        errors.push('quantities array must have at least 2 elements');
+      }
+      break;
+    }
 
     case 'merge_areas':
       if (!intent.sourceNodeIds || intent.sourceNodeIds.length < 2) {
@@ -404,6 +449,32 @@ export function executeIntent(
       return {
         proposals: [proposal],
         message: intent.message || `Split ${intent.sourceName} into ${calculated.length} parts`,
+      };
+    }
+
+    case 'split_by_quantity': {
+      const sourceNode = existingNodes.find(n => n.id === intent.sourceNodeId);
+      if (!sourceNode) {
+        throw new Error(`Source node ${intent.sourceNodeId} not found`);
+      }
+      
+      // Generate names for each split
+      const names = intent.names || intent.quantities.map((_, i) => 
+        i === 0 ? sourceNode.name : `${sourceNode.name} (${i + 1})`
+      );
+      
+      // Import the new proposal type
+      const proposal: ProposalBase<import('@/types').SplitByQuantityProposal> = {
+        type: 'split_by_quantity',
+        sourceNodeId: intent.sourceNodeId,
+        sourceName: intent.sourceName,
+        quantities: intent.quantities,
+        names,
+      };
+      
+      return {
+        proposals: [proposal],
+        message: intent.message || `Split ${intent.sourceName} by quantity: ×${intent.quantities.join(' + ×')} (linked instances)`,
       };
     }
 

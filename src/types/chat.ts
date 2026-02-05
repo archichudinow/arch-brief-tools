@@ -53,6 +53,35 @@ export interface SystemMessage {
 export type ChatMessage = UserMessage | AIMessage | SystemMessage;
 
 // ============================================
+// TREE EXPLORATION STATE (Formula-based workflow)
+// ============================================
+
+/** Scale clarification when AI detects potential mismatch */
+export interface ScaleClarificationOption {
+  label: string;
+  area: number;
+  scale: 'interior' | 'architecture' | 'landscape' | 'masterplan' | 'urban';
+  interpretation?: string;
+}
+
+/** State when clarification is needed */
+export interface ClarificationPending {
+  type: 'clarification';
+  originalInput: string;
+  message: string;
+  options: ScaleClarificationOption[];
+}
+
+/** Expansion request for an area */
+export interface ExpandAreaRequest {
+  nodeId: UUID;
+  nodeName: string;
+  nodeArea: number;
+  depth: number;  // 1-3 levels
+  context?: string;
+}
+
+// ============================================
 // PROPOSAL TYPES
 // ============================================
 
@@ -66,6 +95,10 @@ export interface CreateAreasProposal {
     briefNote?: string;
     aiNote?: string;
     groupHint?: string;  // Suggested group name for auto-grouping
+    formulaReasoning?: string;  // Formula-based: why this size
+    formulaConfidence?: number; // 0-1 confidence
+    formulaType?: string;       // ratio, unit_based, remainder, etc.
+    expandable?: boolean;       // Can this area be expanded further
   }>;
   status: ProposalStatus;
 }
@@ -79,6 +112,10 @@ export interface SplitAreaProposal {
     name: string;
     areaPerUnit: number;
     count: number;
+    formulaReasoning?: string;  // Formula-based: why this size
+    formulaConfidence?: number; // 0-1 confidence
+    formulaType?: string;       // ratio, unit_based, remainder, etc.
+    expandable?: boolean;       // Can this area be expanded further
   }>;
   // Optional: if provided, create a group with this name and assign all splits to it
   groupName?: string;
@@ -96,6 +133,21 @@ export interface MergeAreasProposal {
     areaPerUnit: number;
     count: number;
   };
+  status: ProposalStatus;
+}
+
+/**
+ * Split an area by quantity - resulting areas stay linked as instances
+ * Use when splitting "Room A × 10" into "Room A × 3" + "Room A × 7"
+ * The room type stays the same, just distributed differently
+ */
+export interface SplitByQuantityProposal {
+  id: UUID;
+  type: 'split_by_quantity';
+  sourceNodeId: UUID;
+  sourceName: string;
+  quantities: number[];  // e.g., [3, 7] from count=10
+  names?: string[];      // Optional custom names for each split
   status: ProposalStatus;
 }
 
@@ -187,6 +239,7 @@ export interface MergeGroupAreasProposal {
 export type Proposal =
   | CreateAreasProposal
   | SplitAreaProposal
+  | SplitByQuantityProposal
   | MergeAreasProposal
   | UpdateAreasProposal
   | CreateGroupsProposal

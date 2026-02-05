@@ -11,11 +11,18 @@ import {
   addIdsToProposals, 
   enhancePrompt, 
   tryDeterministicOperation,
-  type EnhancedPrompt 
+  generateFormulaProgram,
+  formulaResponseToProposals,
+  resolveClarification,
+  expandArea,
+  type EnhancedPrompt,
+  type ClarificationOption,
 } from '@/services';
 import { MessageBubble } from './MessageBubble';
 import { BriefInput } from './BriefInput';
-import { DetailLevelSelector } from './DetailLevelSelector';
+import { ExpandDepthSelector, type ExploreDepth } from './ExpandDepthSelector';
+import { ClarificationCard } from './ClarificationCard';
+import type { ScaleClarificationOption, Proposal } from '@/types';
 import { 
   Send, 
   Loader2, 
@@ -67,7 +74,6 @@ export function ChatPanel() {
   
   const selectedNodeIds = useUIStore((s) => s.selectedNodeIds);
   const selectedGroupIds = useUIStore((s) => s.selectedGroupIds);
-  const detailLevel = useUIStore((s) => s.detailLevel);
   
   const nodes = useProjectStore((s) => s.nodes);
   const groups = useProjectStore((s) => s.groups);
@@ -78,6 +84,14 @@ export function ChatPanel() {
   // Enhanced prompts state
   const [enhancedPrompts, setEnhancedPrompts] = useState<EnhancedPrompt[]>([]);
   const [isEnhancing, setIsEnhancing] = useState(false);
+  
+  // Formula-based workflow state
+  const [expandDepth, setExpandDepth] = useState<ExploreDepth>(1);
+  const [clarificationPending, setClarificationPending] = useState<{
+    originalInput: string;
+    message: string;
+    options: ScaleClarificationOption[];
+  } | null>(null);
   
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -97,25 +111,20 @@ export function ChatPanel() {
     if (!inputValue.trim() || isLoading) return;
     
     const content = inputValue.trim();
-    
-    // Prepend detail level prefix if not standard
-    const detailPrefix = 
-      detailLevel === 'abstract' ? '[ABSTRACT LEVEL - create only 4-6 high-level zones] ' :
-      detailLevel === 'detailed' ? '[DETAILED LEVEL - create 40-60+ specific rooms/areas] ' : '';
-    const contentWithLevel = detailPrefix + content;
+    setInputValue('');
     
     // Get selected items
     const selectedNodes = selectedNodeIds.map((id) => nodes[id]).filter(Boolean);
     const selectedGroups = selectedGroupIds.map((id) => groups[id]).filter(Boolean);
     
-    // Add user message (show original without prefix)
+    // Add user message
     addUserMessage(content, selectedNodeIds, selectedGroupIds);
     setLoading(true);
     
     try {
       // FIRST: Try deterministic operation (for scale/adjust - faster, exact math)
       const deterministicResult = tryDeterministicOperation(
-        contentWithLevel,
+        content,
         selectedNodes,
         selectedGroups,
         nodes
@@ -133,12 +142,75 @@ export function ChatPanel() {
         return;
       }
       
-      // FALLBACK: Use LLM for complex/creative operations
-      console.log('Using LLM (intent:', deterministicResult.intent?.type || 'none', ')');
+      // EXPAND/UNFOLD: When user wants to break down selected areas
+      const isExpandRequest = content.toLowerCase().match(
+        /\b(expand|unfold|break\s*down|detail|sub-?divide|elaborate)\b/i
+      );
+      
+      if (chatMode === 'agent' && isExpandRequest && selectedNodes.length > 0) {
+        console.log('Using formula-based expand for selected areas');
+        
+        // Expand each selected node
+        const allProposals: Proposal[] = [];
+        let responseMessage = '';
+        
+        for (const node of selectedNodes) {
+          const expandResponse = await expandArea(node, expandDepth, content);
+          
+          if (expandResponse.warnings?.includes('area_too_small')) {
+            responseMessage += expandResponse.message + '\n';
+            continue;
+          }
+          
+          const proposals = formulaResponseToProposals(expandResponse, node);
+          allProposals.push(...proposals);
+          responseMessage += expandResponse.message + '\n';
+        }
+        
+        addAIMessage(
+          responseMessage.trim() || `Expanded ${selectedNodes.length} area(s)`,
+          allProposals.length > 0 ? allProposals : undefined
+        );
+        setLoading(false);
+        return;
+      }
+      
+      // FORMULA-BASED APPROACH: Use for program generation
+      // Check if this looks like a brief/program request
+      const isProgramRequest = content.toLowerCase().match(
+        /\b(create|generate|make|design|plan|breakdown|program|layout|split|hotel|office|apartment|building|residential|commercial)\b/i
+      );
+      
+      if (chatMode === 'agent' && isProgramRequest) {
+        console.log('Using formula-based generation');
+        
+        const formulaResponse = await generateFormulaProgram(content);
+        
+        // Handle clarification needed
+        if (formulaResponse.clarification_needed && formulaResponse.options) {
+          setClarificationPending({
+            originalInput: content,
+            message: formulaResponse.message,
+            options: formulaResponse.options as ScaleClarificationOption[],
+          });
+          addAIMessage(formulaResponse.message);
+          setLoading(false);
+          return;
+        }
+        
+        // Convert to proposals
+        const proposals = formulaResponseToProposals(formulaResponse);
+        addAIMessage(formulaResponse.message, proposals.length > 0 ? proposals : undefined);
+        setLoading(false);
+        return;
+      }
+      
+      // FALLBACK: Use standard LLM for other operations
+      console.log('Using standard LLM');
       
       // Build request with chat mode configuration
       const request = buildChatRequest(
-        contentWithLevel,
+        content,
         projectContext,
         selectedNodes,
         selectedGroups,
@@ -148,7 +220,6 @@ export function ChatPanel() {
       );
       
       // Send to AI with mode and context for intent processing
-      // In agent mode, pass nodes/groups so intents can be executed with exact math
       const allNodes = Object.values(nodes);
       const allGroups = Object.values(groups);
       const response = await sendChatMessage(
@@ -158,7 +229,6 @@ export function ChatPanel() {
       );
       
       console.log('Chat response:', response);
-      console.log('Proposals from response:', response.proposals);
       
       // Add proposals with IDs (only in agent mode)
       const proposals = response.proposals
@@ -183,6 +253,40 @@ export function ChatPanel() {
       e.preventDefault();
       handleSend();
     }
+  };
+  
+  // Handle clarification selection
+  const handleClarificationSelect = async (option: ScaleClarificationOption) => {
+    if (!clarificationPending) return;
+    
+    setClarificationPending(null);
+    setLoading(true);
+    
+    try {
+      const clarificationOption: ClarificationOption = {
+        label: option.label,
+        area: option.area,
+        scale: option.scale,
+        interpretation: option.interpretation,
+      };
+      
+      const formulaResponse = await resolveClarification(
+        clarificationPending.originalInput,
+        clarificationOption
+      );
+      
+      const proposals = formulaResponseToProposals(formulaResponse);
+      addAIMessage(formulaResponse.message, proposals.length > 0 ? proposals : undefined);
+    } catch (error) {
+      console.error('Clarification error:', error);
+      addSystemMessage('Failed to process clarification. Please try again.', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  const handleClarificationDismiss = () => {
+    setClarificationPending(null);
   };
   
   const handleEnhance = async () => {
@@ -336,8 +440,8 @@ export function ChatPanel() {
               )}
             </div>
           </div>
-          {/* Row 2: Detail Level */}
-          <DetailLevelSelector />
+          {/* Row 2: Expand Depth (for tree exploration) */}
+          <ExpandDepthSelector depth={expandDepth} onDepthChange={setExpandDepth} />
         </div>
       )}
       
@@ -348,18 +452,30 @@ export function ChatPanel() {
           {/* Messages */}
           <ScrollArea className="flex-1 min-h-0" ref={scrollRef}>
             <div className="px-4 py-4">
-              {messages.length === 0 ? (
+              {/* Show clarification card if pending */}
+              {clarificationPending && (
+                <div className="mb-4">
+                  <ClarificationCard
+                    message={clarificationPending.message}
+                    options={clarificationPending.options}
+                    onSelect={handleClarificationSelect}
+                    onDismiss={handleClarificationDismiss}
+                  />
+                </div>
+              )}
+              
+              {messages.length === 0 && !clarificationPending ? (
                 <div className="h-full flex flex-col items-center justify-center text-center text-muted-foreground">
                   <Sparkles className="w-12 h-12 mb-4 opacity-20" />
                   <p className="text-sm font-medium">AI Assistant</p>
                   <p className="text-xs mt-1">
-                    Ask questions about your areas,<br />
-                    request splits, merges, or analysis
+                    Describe your project and total area.<br />
+                    AI will generate a formula-based breakdown.
                   </p>
                   <div className="my-4 w-32 h-px bg-border" />
                   <p className="text-xs">
-                    Or switch to <strong>Brief Mode</strong><br />
-                    to parse a project brief
+                    Click any area to <strong>expand</strong> it further,<br />
+                    or switch to <strong>Brief Mode</strong>
                   </p>
                 </div>
               ) : (

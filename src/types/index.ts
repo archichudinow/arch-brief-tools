@@ -5,3 +5,4 @@ export * from './groups';
 export * from './notes';
 export * from './history';
 export * from './chat';
+export * from './formulas';

@@ -1,6 +1,7 @@
-import { useRef, useState, useCallback, useEffect } from 'react';
+import { useRef, useState, useCallback, useEffect, useMemo } from 'react';
 import { useProjectStore, useUIStore } from '@/stores';
 import { useGridLayout, snapToGrid, findGroupAtPosition, GROUP_PADDING, GROUP_HEADER_HEIGHT, UNUSED_AREAS_GROUP_ID, type LayoutRect } from './useGridLayout';
+import type { AreaNode, UUID } from '@/types';
 import { GroupContainer } from './GroupContainer';
 import { BoardComment } from './BoardComment';
 import { ZoomIn, ZoomOut, Maximize2, Move, Plus, FolderPlus, MessageSquare, MousePointer2 } from 'lucide-react';
@@ -42,9 +43,30 @@ export function AreaBoard() {
   const [showCreateGroupDialog, setShowCreateGroupDialog] = useState(false);
 
   // Store data - project store (persisted)
-  const nodes = useProjectStore((s) => s.nodes);
+  const rawNodes = useProjectStore((s) => s.nodes);
   const groups = useProjectStore((s) => s.groups);
+  const getNodeDerived = useProjectStore((s) => s.getNodeDerived);
   const assignToGroup = useProjectStore((s) => s.assignToGroup);
+  
+  // Compute nodes with effective areas (resolves instance links)
+  // This ensures instances display with their source's areaPerUnit
+  const nodes = useMemo(() => {
+    const effectiveNodes: Record<UUID, AreaNode> = {};
+    for (const [id, node] of Object.entries(rawNodes)) {
+      const derived = getNodeDerived(id);
+      if (derived && node.instanceOf) {
+        // Instance: use effective area from source
+        effectiveNodes[id] = {
+          ...node,
+          areaPerUnit: derived.effectiveAreaPerUnit,
+        };
+        console.debug(`[AreaBoard] Instance ${node.name}: using effective area ${derived.effectiveAreaPerUnit} from source`);
+      } else {
+        effectiveNodes[id] = node;
+      }
+    }
+    return effectiveNodes;
+  }, [rawNodes, getNodeDerived]);
   const removeFromGroup = useProjectStore((s) => s.removeFromGroup);
   
   // Board layout from project store (persisted on export)

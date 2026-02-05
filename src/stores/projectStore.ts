@@ -62,6 +62,18 @@ interface ProjectState {
   duplicateNode: (id: UUID) => UUID | null;
   mergeNodes: (nodeIds: UUID[], newName: string) => UUID | null;
   
+  // Instance Operations
+  duplicateAsInstance: (id: UUID) => UUID | null;  // Creates linked copy
+  duplicateAsCopy: (id: UUID) => UUID | null;      // Creates independent copy
+  unlinkInstance: (id: UUID) => void;              // Breaks instance link
+  
+  // Quantity/Collapse Operations
+  collapseNodes: (nodeIds: UUID[]) => UUID | null;      // Merge identical into one with sum quantity
+  expandNode: (id: UUID) => UUID[];                      // Split into individual nodes
+  splitQuantity: (id: UUID, quantities: number[]) => UUID[];  // Split quantity into groups
+  mergeQuantities: (nodeIds: UUID[]) => UUID | null;          // Merge same-type groups
+  collapseToArea: (id: UUID) => UUID | null;                  // Convert to totalArea × 1, break links
+  
   // Split Actions
   splitNodeByQuantity: (nodeId: UUID, quantities: number[]) => UUID[];
   splitNodeByEqual: (nodeId: UUID, parts: number) => UUID[];
@@ -277,6 +289,10 @@ export const useProjectStore = create<ProjectState>()(
           areaPerUnit: input.areaPerUnit,
           count: input.count,
           notes, // Populated notes array
+          // Formula-based reasoning (if provided)
+          formulaReasoning: input.formulaReasoning || null,
+          formulaConfidence: input.formulaConfidence || null,
+          formulaType: input.formulaType || null,
           lockedFields: [],
           createdAt: timestamp,
           modifiedAt: timestamp,
@@ -296,13 +312,54 @@ export const useProjectStore = create<ProjectState>()(
     },
 
     updateNode: (id, input) => {
-      const node = get().nodes[id];
+      const state = get();
+      const node = state.nodes[id];
       if (!node) return;
+
+      console.debug('[updateNode] Called for:', node.name, 'id:', id, 'input:', input);
 
       // Check locked fields
       const updates = { ...input };
       for (const field of node.lockedFields) {
         delete updates[field as keyof UpdateAreaNodeInput];
+      }
+
+      // If this is an instance and we're updating areaPerUnit, 
+      // redirect the update to the source node (which updates all instances)
+      if (node.instanceOf && updates.areaPerUnit !== undefined) {
+        const sourceNode = state.nodes[node.instanceOf];
+        if (sourceNode) {
+          console.debug('[updateNode] Instance detected! Redirecting areaPerUnit update to source:', sourceNode.name, 'sourceId:', node.instanceOf);
+          console.debug('[updateNode] Old source areaPerUnit:', sourceNode.areaPerUnit, '-> New:', updates.areaPerUnit);
+          
+          // Update source instead - this propagates to all instances
+          set((state) => {
+            const source = state.nodes[node.instanceOf!];
+            if (source && updates.areaPerUnit !== undefined && updates.areaPerUnit > 0) {
+              source.areaPerUnit = updates.areaPerUnit;
+              source.modifiedAt = now();
+              console.debug('[updateNode] Source updated successfully. New areaPerUnit:', source.areaPerUnit);
+            }
+            // Still update other fields on this node (like count, name)
+            const thisNode = state.nodes[id];
+            if (thisNode) {
+              if (updates.name !== undefined) thisNode.name = updates.name;
+              if (updates.count !== undefined && updates.count >= 1) thisNode.count = updates.count;
+              if (updates.userNote !== undefined) thisNode.userNote = updates.userNote;
+              if (updates.lockedFields !== undefined) thisNode.lockedFields = updates.lockedFields;
+              if (updates.instanceOf !== undefined) thisNode.instanceOf = updates.instanceOf;
+              thisNode.modifiedAt = now();
+            }
+            state.meta.modifiedAt = now();
+          });
+
+          const newState = get();
+          useHistoryStore.getState().snapshot('update_node', `Updated "${sourceNode.name}" (via instance)`, {
+            nodes: newState.nodes,
+            groups: newState.groups,
+          });
+          return;
+        }
       }
 
       set((state) => {
@@ -314,15 +371,16 @@ export const useProjectStore = create<ProjectState>()(
         if (updates.count !== undefined && updates.count >= 1) node.count = updates.count;
         if (updates.userNote !== undefined) node.userNote = updates.userNote;
         if (updates.lockedFields !== undefined) node.lockedFields = updates.lockedFields;
+        if (updates.instanceOf !== undefined) node.instanceOf = updates.instanceOf;
         
         node.modifiedAt = now();
         state.meta.modifiedAt = now();
       });
 
-      const state = get();
+      const newState = get();
       useHistoryStore.getState().snapshot('update_node', `Updated "${node.name}"`, {
-        nodes: state.nodes,
-        groups: state.groups,
+        nodes: newState.nodes,
+        groups: newState.groups,
       });
     },
 
@@ -376,11 +434,492 @@ export const useProjectStore = create<ProjectState>()(
     },
 
     // ==========================================
+    // INSTANCE OPERATIONS
+    // ==========================================
+
+    // Creates a linked copy - inherits areaPerUnit from source
+    duplicateAsInstance: (id) => {
+      const node = get().nodes[id];
+      if (!node) return null;
+
+      const newId = uuidv4();
+      const timestamp = now();
+      
+      // Source is either node's own source (if already instance) or the node itself
+      const sourceId = node.instanceOf ?? id;
+      
+      // Find which group the original belongs to
+      const state = get();
+      const originalGroupId = Object.keys(state.groups).find(gid => 
+        state.groups[gid].members.includes(id)
+      );
+
+      set((state) => {
+        // If original doesn't have instanceOf yet, add self-reference to join the family
+        if (!node.instanceOf) {
+          const original = state.nodes[id];
+          if (original) {
+            original.instanceOf = id; // Self-reference indicates it's the source of truth
+            original.modifiedAt = timestamp;
+          }
+        }
+        
+        state.nodes[newId] = {
+          ...node,
+          id: newId,
+          name: node.name, // Keep same name for instances
+          instanceOf: sourceId,
+          createdAt: timestamp,
+          modifiedAt: timestamp,
+        };
+        
+        // Add to same group as original
+        if (originalGroupId && state.groups[originalGroupId]) {
+          state.groups[originalGroupId].members.push(newId);
+        }
+        state.meta.modifiedAt = timestamp;
+      });
+
+      const newState = get();
+      useHistoryStore.getState().snapshot('duplicate_instance', `Created instance of "${node.name}"`, {
+        nodes: newState.nodes,
+        groups: newState.groups,
+      });
+
+      return newId;
+    },
+
+    // Creates an independent copy - no link
+    duplicateAsCopy: (id) => {
+      const node = get().nodes[id];
+      if (!node) return null;
+
+      const newId = uuidv4();
+      const timestamp = now();
+      
+      // Get effective area (from source if instance)
+      const state = get();
+      const sourceNode = node.instanceOf ? state.nodes[node.instanceOf] : null;
+      const effectiveArea = sourceNode ? sourceNode.areaPerUnit : node.areaPerUnit;
+      
+      // Find which group the original belongs to
+      const originalGroupId = Object.keys(state.groups).find(gid => 
+        state.groups[gid].members.includes(id)
+      );
+
+      set((state) => {
+        state.nodes[newId] = {
+          ...node,
+          id: newId,
+          name: `${node.name} (copy)`,
+          areaPerUnit: effectiveArea, // Copy the effective area
+          instanceOf: null,           // No link
+          createdAt: timestamp,
+          modifiedAt: timestamp,
+        };
+        
+        // Add to same group as original
+        if (originalGroupId && state.groups[originalGroupId]) {
+          state.groups[originalGroupId].members.push(newId);
+        }
+        state.meta.modifiedAt = timestamp;
+      });
+
+      const newState = get();
+      useHistoryStore.getState().snapshot('duplicate_copy', `Copied "${node.name}"`, {
+        nodes: newState.nodes,
+        groups: newState.groups,
+      });
+
+      return newId;
+    },
+
+    // Breaks instance link - makes independent with current effective area
+    unlinkInstance: (id) => {
+      const node = get().nodes[id];
+      if (!node || !node.instanceOf) return;
+
+      const state = get();
+      const sourceNode = state.nodes[node.instanceOf];
+      const effectiveArea = sourceNode ? sourceNode.areaPerUnit : node.areaPerUnit;
+      const timestamp = now();
+
+      set((state) => {
+        state.nodes[id].areaPerUnit = effectiveArea;
+        state.nodes[id].instanceOf = null;
+        state.nodes[id].modifiedAt = timestamp;
+        state.meta.modifiedAt = timestamp;
+      });
+
+      const newState = get();
+      useHistoryStore.getState().snapshot('unlink_instance', `Unlinked "${node.name}" from source`, {
+        nodes: newState.nodes,
+        groups: newState.groups,
+      });
+    },
+
+    // ==========================================
+    // QUANTITY/COLLAPSE OPERATIONS
+    // ==========================================
+
+    // Collapse identical nodes into one with sum quantity
+    collapseNodes: (nodeIds) => {
+      if (nodeIds.length < 2) return null;
+      
+      const state = get();
+      const nodes = nodeIds.map(id => state.nodes[id]).filter(Boolean);
+      if (nodes.length < 2) return null;
+      
+      // All must have same instanceOf (or be instances of first node, or all independent with same area)
+      const firstNode = nodes[0];
+      const sourceId = firstNode.instanceOf ?? firstNode.id;
+      
+      // Verify all are compatible (same type)
+      const allCompatible = nodes.every(n => {
+        if (n.instanceOf) return n.instanceOf === sourceId || n.instanceOf === firstNode.id;
+        return n.id === sourceId || 
+               (n.areaPerUnit === firstNode.areaPerUnit && !firstNode.instanceOf);
+      });
+      
+      if (!allCompatible) {
+        console.warn('Cannot collapse nodes of different types');
+        return null;
+      }
+      
+      const totalQuantity = nodes.reduce((sum, n) => sum + n.count, 0);
+      const newId = uuidv4();
+      const timestamp = now();
+      
+      // Find which group any of the original nodes belong to (use first found)
+      const originalGroupId = Object.keys(state.groups).find(gid => 
+        nodeIds.some(nid => state.groups[gid].members.includes(nid))
+      );
+
+      set((state) => {
+        // Create collapsed node
+        state.nodes[newId] = {
+          ...firstNode,
+          id: newId,
+          count: totalQuantity,
+          instanceOf: firstNode.instanceOf ?? null,
+          createdAt: timestamp,
+          modifiedAt: timestamp,
+        };
+        
+        // Remove originals from groups and delete them
+        for (const id of nodeIds) {
+          for (const group of Object.values(state.groups)) {
+            group.members = group.members.filter(mid => mid !== id);
+          }
+          delete state.nodes[id];
+        }
+        
+        // Add new node to same group
+        if (originalGroupId && state.groups[originalGroupId]) {
+          state.groups[originalGroupId].members.push(newId);
+        }
+        
+        state.meta.modifiedAt = timestamp;
+      });
+
+      const newState = get();
+      useHistoryStore.getState().snapshot('collapse_nodes', `Collapsed ${nodeIds.length} nodes into "${firstNode.name} ×${totalQuantity}"`, {
+        nodes: newState.nodes,
+        groups: newState.groups,
+      });
+
+      return newId;
+    },
+
+    // Expand collapsed node into individual nodes
+    expandNode: (id) => {
+      const state = get();
+      const node = state.nodes[id];
+      if (!node || node.count <= 1) return [id];
+
+      const newIds: UUID[] = [];
+      const timestamp = now();
+      
+      // Check if this node is part of an instance family
+      const hasInstanceFamily = !!node.instanceOf;
+      // Check if this node is the source of truth for a family
+      const isSourceOfTruth = node.instanceOf === id;
+      const existingSourceId = node.instanceOf;
+      
+      // Find all other nodes that point to this source (if we are the source)
+      const otherFamilyMembers = isSourceOfTruth 
+        ? Object.values(state.nodes).filter(n => n.instanceOf === id && n.id !== id)
+        : [];
+      
+      // Find which group the original belongs to
+      const originalGroupId = Object.keys(state.groups).find(gid => 
+        state.groups[gid].members.includes(id)
+      );
+
+      set((state) => {
+        // Generate all new IDs first
+        for (let i = 0; i < node.count; i++) {
+          newIds.push(uuidv4());
+        }
+        
+        // Determine the source ID for the expanded nodes:
+        // 1. If this was the source, first expanded node becomes new source
+        // 2. If this was an instance, keep pointing to the existing source
+        // 3. If this had no family, first expanded node becomes new source (creates new family)
+        const newSourceId = hasInstanceFamily 
+          ? (isSourceOfTruth ? newIds[0] : existingSourceId)
+          : newIds[0]; // Create new family with first as source
+        
+        // Create individual nodes as instances
+        for (let i = 0; i < node.count; i++) {
+          const newId = newIds[i];
+          state.nodes[newId] = {
+            ...node,
+            id: newId,
+            count: 1,
+            // First node becomes source (self-ref), others point to it
+            instanceOf: (i === 0 && (isSourceOfTruth || !hasInstanceFamily)) ? newId : newSourceId,
+            createdAt: timestamp,
+            modifiedAt: timestamp,
+          };
+        }
+        
+        // If we were the source, update all other family members to point to new source
+        if (isSourceOfTruth && newSourceId) {
+          for (const member of otherFamilyMembers) {
+            const memberNode = state.nodes[member.id];
+            if (memberNode) {
+              memberNode.instanceOf = newSourceId;
+              memberNode.modifiedAt = timestamp;
+            }
+          }
+        }
+        
+        // Remove original from groups and add new nodes to same group
+        for (const group of Object.values(state.groups)) {
+          group.members = group.members.filter(mid => mid !== id);
+        }
+        if (originalGroupId && state.groups[originalGroupId]) {
+          state.groups[originalGroupId].members.push(...newIds);
+        }
+        
+        // Delete original collapsed node
+        delete state.nodes[id];
+        state.meta.modifiedAt = timestamp;
+      });
+
+      const newState = get();
+      useHistoryStore.getState().snapshot('expand_node', `Expanded "${node.name}" into ${node.count} individual nodes`, {
+        nodes: newState.nodes,
+        groups: newState.groups,
+      });
+
+      return newIds;
+    },
+
+    // Split quantity into specified groups (e.g., 100 → [60, 40])
+    splitQuantity: (id, quantities) => {
+      const state = get();
+      const node = state.nodes[id];
+      if (!node) return [];
+      
+      const total = quantities.reduce((a, b) => a + b, 0);
+      if (total !== node.count) {
+        console.warn(`Quantities sum (${total}) must equal node count (${node.count})`);
+        return [];
+      }
+      
+      if (quantities.some(q => q < 1)) {
+        console.warn('All quantities must be >= 1');
+        return [];
+      }
+
+      const newIds: UUID[] = [];
+      const timestamp = now();
+      
+      // Check if this node is part of an instance family
+      const hasInstanceFamily = !!node.instanceOf;
+      const isSourceOfTruth = node.instanceOf === id;
+      const existingSourceId = node.instanceOf;
+      
+      // Find all other nodes that point to this source (if we are the source)
+      const otherFamilyMembers = isSourceOfTruth 
+        ? Object.values(state.nodes).filter(n => n.instanceOf === id && n.id !== id)
+        : [];
+      
+      // Find which group the original belongs to
+      const originalGroupId = Object.keys(state.groups).find(gid => 
+        state.groups[gid].members.includes(id)
+      );
+
+      set((state) => {
+        // Generate all IDs first
+        quantities.forEach(() => newIds.push(uuidv4()));
+        
+        // Determine the source ID for split nodes
+        const newSourceId = hasInstanceFamily 
+          ? (isSourceOfTruth ? newIds[0] : existingSourceId)
+          : newIds[0]; // Create new family with first as source
+        
+        quantities.forEach((qty, i) => {
+          const newId = newIds[i];
+          state.nodes[newId] = {
+            ...node,
+            id: newId,
+            name: i === 0 ? node.name : `${node.name} (${i + 1})`,
+            count: qty,
+            // First node becomes source (self-ref), others point to it
+            instanceOf: (i === 0 && (isSourceOfTruth || !hasInstanceFamily)) ? newId : newSourceId,
+            createdAt: timestamp,
+            modifiedAt: timestamp,
+          };
+        });
+        
+        // If we were the source, update all other family members to point to new source
+        if (isSourceOfTruth && newSourceId) {
+          for (const member of otherFamilyMembers) {
+            const memberNode = state.nodes[member.id];
+            if (memberNode) {
+              memberNode.instanceOf = newSourceId;
+              memberNode.modifiedAt = timestamp;
+            }
+          }
+        }
+        
+        // Remove original from groups and add new nodes to same group
+        for (const group of Object.values(state.groups)) {
+          group.members = group.members.filter(mid => mid !== id);
+        }
+        if (originalGroupId && state.groups[originalGroupId]) {
+          state.groups[originalGroupId].members.push(...newIds);
+        }
+        
+        delete state.nodes[id];
+        state.meta.modifiedAt = timestamp;
+      });
+
+      const newState = get();
+      useHistoryStore.getState().snapshot('split_quantity', `Split "${node.name}" into ${quantities.length} groups`, {
+        nodes: newState.nodes,
+        groups: newState.groups,
+      });
+
+      return newIds;
+    },
+
+    // Merge groups of same type (sums quantities)
+    mergeQuantities: (nodeIds) => {
+      if (nodeIds.length < 2) return null;
+      
+      const state = get();
+      const nodes = nodeIds.map(id => state.nodes[id]).filter(Boolean);
+      if (nodes.length < 2) return null;
+      
+      // Verify all reference same source
+      const sourceIds = new Set(nodes.map(n => n.instanceOf ?? n.id));
+      if (sourceIds.size > 1) {
+        // Check if they're independent with same areaPerUnit
+        const areas = new Set(nodes.map(n => n.areaPerUnit));
+        if (areas.size > 1 || nodes.some(n => n.instanceOf)) {
+          console.warn('Can only merge nodes of same type');
+          return null;
+        }
+      }
+      
+      const totalQty = nodes.reduce((sum, n) => sum + n.count, 0);
+      const newId = uuidv4();
+      const timestamp = now();
+      
+      // Find which group any of the original nodes belong to (use first found)
+      const originalGroupId = Object.keys(state.groups).find(gid => 
+        nodeIds.some(nid => state.groups[gid].members.includes(nid))
+      );
+
+      set((state) => {
+        state.nodes[newId] = {
+          ...nodes[0],
+          id: newId,
+          count: totalQty,
+          createdAt: timestamp,
+          modifiedAt: timestamp,
+        };
+        
+        // Remove originals from groups and delete them
+        for (const id of nodeIds) {
+          for (const group of Object.values(state.groups)) {
+            group.members = group.members.filter(mid => mid !== id);
+          }
+          delete state.nodes[id];
+        }
+        
+        // Add new node to same group
+        if (originalGroupId && state.groups[originalGroupId]) {
+          state.groups[originalGroupId].members.push(newId);
+        }
+        
+        state.meta.modifiedAt = timestamp;
+      });
+
+      const newState = get();
+      useHistoryStore.getState().snapshot('merge_quantities', `Merged ${nodeIds.length} groups into "${nodes[0].name} ×${totalQty}"`, {
+        nodes: newState.nodes,
+        groups: newState.groups,
+      });
+
+      return newId;
+    },
+
+    // Collapse to single area: converts to totalArea × 1, breaks all instance links
+    collapseToArea: (id) => {
+      const state = get();
+      const node = state.nodes[id];
+      if (!node) return null;
+
+      // Get effective area per unit (from source if instance)
+      const sourceNode = node.instanceOf ? state.nodes[node.instanceOf] : null;
+      const effectiveAreaPerUnit = sourceNode ? sourceNode.areaPerUnit : node.areaPerUnit;
+      const totalArea = effectiveAreaPerUnit * node.count;
+
+      const timestamp = now();
+
+      set((state) => {
+        const n = state.nodes[id];
+        if (!n) return;
+
+        // Convert to total area as single unit
+        n.areaPerUnit = Math.round(totalArea);
+        n.count = 1;
+        
+        // Break instance link
+        n.instanceOf = null;
+        
+        // Copy reasoning from source if it was an instance
+        if (sourceNode) {
+          n.formulaReasoning = sourceNode.formulaReasoning ?? n.formulaReasoning;
+          n.formulaConfidence = sourceNode.formulaConfidence ?? n.formulaConfidence;
+          n.formulaType = sourceNode.formulaType ?? n.formulaType;
+        }
+        
+        n.modifiedAt = timestamp;
+        state.meta.modifiedAt = timestamp;
+      });
+
+      const newState = get();
+      useHistoryStore.getState().snapshot('collapse_to_area', `Collapsed "${node.name}" to ${totalArea.toLocaleString()}m²`, {
+        nodes: newState.nodes,
+        groups: newState.groups,
+      });
+
+      return id;
+    },
+
+    // ==========================================
     // SPLIT BY QUANTITY ACTION
     // ==========================================
 
     splitNodeByQuantity: (nodeId, quantities) => {
-      const node = get().nodes[nodeId];
+      const state = get();
+      const node = state.nodes[nodeId];
       if (!node) return [];
       
       // Validate: must have at least 2 quantities
@@ -395,28 +934,66 @@ export const useProjectStore = create<ProjectState>()(
 
       const ids: UUID[] = [];
       const timestamp = now();
+      
+      // Check if this node is part of an instance family
+      const hasInstanceFamily = !!node.instanceOf;
+      // Check if this node is the source of truth for a family
+      const isSourceOfTruth = node.instanceOf === nodeId;
+      const existingSourceId = node.instanceOf;
+      
+      // Find all other nodes that point to this source (if we are the source)
+      const otherFamilyMembers = isSourceOfTruth 
+        ? Object.values(state.nodes).filter(n => n.instanceOf === nodeId && n.id !== nodeId)
+        : [];
+      
+      // Find which group the original belongs to
+      const originalGroupId = Object.keys(state.groups).find(gid => 
+        state.groups[gid].members.includes(nodeId)
+      );
 
       set((state) => {
-        // Create new nodes for each quantity
+        // Generate all IDs first
         for (let i = 0; i < quantities.length; i++) {
-          const id = uuidv4();
-          ids.push(id);
+          ids.push(uuidv4());
+        }
+        
+        // Determine the source ID for split nodes (same logic as expandNode)
+        const newSourceId = hasInstanceFamily 
+          ? (isSourceOfTruth ? ids[0] : existingSourceId)
+          : ids[0]; // Create new family with first as source
+        
+        // Create new nodes for each quantity as linked instances
+        for (let i = 0; i < quantities.length; i++) {
+          const id = ids[i];
           state.nodes[id] = {
+            ...node,
             id,
             name: `${node.name} (${i + 1})`,
-            areaPerUnit: node.areaPerUnit,
             count: quantities[i],
-            notes: [],
-            lockedFields: [],
+            // First node becomes source (self-ref), others point to it
+            instanceOf: (i === 0 && (isSourceOfTruth || !hasInstanceFamily)) ? id : newSourceId,
             createdAt: timestamp,
             modifiedAt: timestamp,
-            createdBy: 'user',
           };
         }
+        
+        // If we were the source, update all other family members to point to new source
+        if (isSourceOfTruth && newSourceId) {
+          for (const member of otherFamilyMembers) {
+            const memberNode = state.nodes[member.id];
+            if (memberNode) {
+              memberNode.instanceOf = newSourceId;
+              memberNode.modifiedAt = timestamp;
+            }
+          }
+        }
 
-        // Remove original node from groups
+        // Remove original node from groups and add new nodes to same group
         for (const group of Object.values(state.groups)) {
           group.members = group.members.filter(id => id !== nodeId);
+        }
+        if (originalGroupId && state.groups[originalGroupId]) {
+          state.groups[originalGroupId].members.push(...ids);
         }
 
         // Delete original node
@@ -424,10 +1001,10 @@ export const useProjectStore = create<ProjectState>()(
         state.meta.modifiedAt = timestamp;
       });
 
-      const state = get();
+      const newState = get();
       useHistoryStore.getState().snapshot('split_by_quantity', `Split "${node.name}" by quantity into ${quantities.length} areas`, {
-        nodes: state.nodes,
-        groups: state.groups,
+        nodes: newState.nodes,
+        groups: newState.groups,
       });
 
       return ids;
@@ -438,7 +1015,8 @@ export const useProjectStore = create<ProjectState>()(
     // ==========================================
 
     splitNodeByEqual: (nodeId, parts) => {
-      const node = get().nodes[nodeId];
+      const state = get();
+      const node = state.nodes[nodeId];
       if (!node) return [];
       if (parts < 2) return [];
 
@@ -450,6 +1028,11 @@ export const useProjectStore = create<ProjectState>()(
 
       const ids: UUID[] = [];
       const timestamp = now();
+      
+      // Find which group the original belongs to
+      const originalGroupId = Object.keys(state.groups).find(gid => 
+        state.groups[gid].members.includes(nodeId)
+      );
 
       set((state) => {
         for (let i = 0; i < parts; i++) {
@@ -468,19 +1051,22 @@ export const useProjectStore = create<ProjectState>()(
           };
         }
 
-        // Remove original node from groups
+        // Remove original node from groups and add new nodes to same group
         for (const group of Object.values(state.groups)) {
           group.members = group.members.filter(id => id !== nodeId);
+        }
+        if (originalGroupId && state.groups[originalGroupId]) {
+          state.groups[originalGroupId].members.push(...ids);
         }
 
         delete state.nodes[nodeId];
         state.meta.modifiedAt = timestamp;
       });
 
-      const state = get();
+      const newState = get();
       useHistoryStore.getState().snapshot('split_by_equal', `Split "${node.name}" into ${parts} equal parts`, {
-        nodes: state.nodes,
-        groups: state.groups,
+        nodes: newState.nodes,
+        groups: newState.groups,
       });
 
       return ids;
@@ -491,7 +1077,8 @@ export const useProjectStore = create<ProjectState>()(
     // ==========================================
 
     splitNodeByAreas: (nodeId, areas) => {
-      const node = get().nodes[nodeId];
+      const state = get();
+      const node = state.nodes[nodeId];
       if (!node) return [];
       if (areas.length < 2) return [];
 
@@ -503,6 +1090,11 @@ export const useProjectStore = create<ProjectState>()(
 
       const ids: UUID[] = [];
       const timestamp = now();
+      
+      // Find which group the original belongs to
+      const originalGroupId = Object.keys(state.groups).find(gid => 
+        state.groups[gid].members.includes(nodeId)
+      );
 
       set((state) => {
         for (const split of areas) {
@@ -521,19 +1113,22 @@ export const useProjectStore = create<ProjectState>()(
           };
         }
 
-        // Remove original node from groups
+        // Remove original node from groups and add new nodes to same group
         for (const group of Object.values(state.groups)) {
           group.members = group.members.filter(id => id !== nodeId);
+        }
+        if (originalGroupId && state.groups[originalGroupId]) {
+          state.groups[originalGroupId].members.push(...ids);
         }
 
         delete state.nodes[nodeId];
         state.meta.modifiedAt = timestamp;
       });
 
-      const state = get();
+      const newState = get();
       useHistoryStore.getState().snapshot('split_by_area', `Split "${node.name}" into ${areas.length} areas`, {
-        nodes: state.nodes,
-        groups: state.groups,
+        nodes: newState.nodes,
+        groups: newState.groups,
       });
 
       return ids;
@@ -544,7 +1139,8 @@ export const useProjectStore = create<ProjectState>()(
     // ==========================================
 
     splitNodeByProportion: (nodeId, percentages) => {
-      const node = get().nodes[nodeId];
+      const state = get();
+      const node = state.nodes[nodeId];
       if (!node) return [];
       if (percentages.length < 2) return [];
 
@@ -556,6 +1152,11 @@ export const useProjectStore = create<ProjectState>()(
       const totalArea = node.areaPerUnit * node.count;
       const ids: UUID[] = [];
       const timestamp = now();
+      
+      // Find which group the original belongs to
+      const originalGroupId = Object.keys(state.groups).find(gid => 
+        state.groups[gid].members.includes(nodeId)
+      );
 
       set((state) => {
         for (const split of percentages) {
@@ -575,19 +1176,22 @@ export const useProjectStore = create<ProjectState>()(
           };
         }
 
-        // Remove original node from groups
+        // Remove original node from groups and add new nodes to same group
         for (const group of Object.values(state.groups)) {
           group.members = group.members.filter(id => id !== nodeId);
+        }
+        if (originalGroupId && state.groups[originalGroupId]) {
+          state.groups[originalGroupId].members.push(...ids);
         }
 
         delete state.nodes[nodeId];
         state.meta.modifiedAt = timestamp;
       });
 
-      const state = get();
+      const newState = get();
       useHistoryStore.getState().snapshot('split_by_proportion', `Split "${node.name}" by proportion into ${percentages.length} areas`, {
-        nodes: state.nodes,
-        groups: state.groups,
+        nodes: newState.nodes,
+        groups: newState.groups,
       });
 
       return ids;
@@ -624,8 +1228,9 @@ export const useProjectStore = create<ProjectState>()(
     mergeNodes: (nodeIds, newName) => {
       if (nodeIds.length < 2) return null;
 
+      const state = get();
       // Get all nodes
-      const nodesToMerge = nodeIds.map(id => get().nodes[id]).filter(Boolean);
+      const nodesToMerge = nodeIds.map(id => state.nodes[id]).filter(Boolean);
       if (nodesToMerge.length !== nodeIds.length) return null;
 
       // Calculate totals
@@ -635,6 +1240,11 @@ export const useProjectStore = create<ProjectState>()(
 
       const newId = uuidv4();
       const timestamp = now();
+      
+      // Find which group any of the original nodes belong to (use first found)
+      const originalGroupId = Object.keys(state.groups).find(gid => 
+        nodeIds.some(nid => state.groups[gid].members.includes(nid))
+      );
 
       set((state) => {
         // Create merged node
@@ -664,14 +1274,19 @@ export const useProjectStore = create<ProjectState>()(
           }
           delete state.nodes[nodeId];
         }
+        
+        // Add new node to same group
+        if (originalGroupId && state.groups[originalGroupId]) {
+          state.groups[originalGroupId].members.push(newId);
+        }
 
         state.meta.modifiedAt = timestamp;
       });
 
-      const state = get();
+      const newState = get();
       useHistoryStore.getState().snapshot('merge_nodes', `Merged ${nodeIds.length} areas into "${newName}"`, {
-        nodes: state.nodes,
-        groups: state.groups,
+        nodes: newState.nodes,
+        groups: newState.groups,
       });
 
       return newId;
@@ -1241,11 +1856,71 @@ export const useProjectStore = create<ProjectState>()(
     // ==========================================
 
     getNodeDerived: (id) => {
-      const node = get().nodes[id];
+      const state = get();
+      const node = state.nodes[id];
       if (!node) return null;
 
+      // Check if this node is part of an instance family
+      // instanceOf is set on ALL family members (including the source via self-reference)
+      const hasInstanceOf = !!node.instanceOf;
+      
+      // The source node is the one where id === instanceOf (self-reference)
+      const sourceId = node.instanceOf;
+      const isSourceOfTruth = hasInstanceOf && node.id === node.instanceOf;
+      const sourceNode = sourceId ? state.nodes[sourceId] : null;
+      
+      // Count all family members (nodes with same instanceOf)
+      const familyMembers = hasInstanceOf 
+        ? Object.values(state.nodes).filter(n => n.instanceOf === sourceId)
+        : [];
+      const instanceCount = familyMembers.length;
+      
+      // hasInstanceLink = part of a family (2+ members)
+      const hasInstanceLink = instanceCount >= 2;
+      
+      // Effective area per unit: always from the source node (where id === instanceOf)
+      const effectiveAreaPerUnit = sourceNode ? sourceNode.areaPerUnit : node.areaPerUnit;
+      
+      if (hasInstanceLink) {
+        console.debug('[getNodeDerived] Instance family:', node.name, 
+          '| familySize:', instanceCount,
+          '| sourceId:', sourceId,
+          '| isSourceOfTruth:', isSourceOfTruth,
+          '| effectiveAreaPerUnit:', effectiveAreaPerUnit);
+      }
+      
+      // Check if container (has children)
+      const isContainer = !!(node.children && node.children.length > 0);
+      
+      // Total area: sum of children if container, else areaPerUnit × count
+      let totalArea: number;
+      if (isContainer) {
+        totalArea = node.children!.reduce((sum, childId) => {
+          const childDerived = get().getNodeDerived(childId);
+          return sum + (childDerived?.totalArea ?? 0);
+        }, 0);
+      } else {
+        totalArea = effectiveAreaPerUnit * node.count;
+      }
+
+      // Effective reasoning/confidence: from source if instance, else own
+      const effectiveReasoning = sourceNode?.formulaReasoning ?? node.formulaReasoning;
+      const effectiveConfidence = sourceNode?.formulaConfidence ?? node.formulaConfidence;
+      const effectiveFormulaType = sourceNode?.formulaType ?? node.formulaType;
+
       return {
-        totalArea: node.areaPerUnit * node.count,
+        totalArea,
+        effectiveAreaPerUnit,
+        isInstance: hasInstanceOf && !isSourceOfTruth, // Points to another node
+        isSource: isSourceOfTruth,                      // Is the source of truth (self-reference)
+        hasInstanceLink,                                // Part of instance family
+        instanceCount: hasInstanceLink ? instanceCount : undefined,
+        isContainer,
+        instanceSourceId: sourceId ?? undefined,
+        instanceSource: sourceNode?.name,
+        effectiveReasoning,
+        effectiveConfidence,
+        effectiveFormulaType,
       };
     },
 
