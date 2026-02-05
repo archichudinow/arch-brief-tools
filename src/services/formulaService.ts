@@ -177,19 +177,20 @@ Each zone MUST have "Zone", "Wing", "Area", "Facilities", or "Block" in its name
       const expandResponse = await expandArea(mockNode, depth - 1, briefText);
       
       const hasChildren = expandResponse.intent?.type === 'expand_area' && 
+                         expandResponse.intent.type === 'expand_area' &&
                          expandResponse.intent.children && 
                          expandResponse.intent.children.length > 0;
       
       console.log(`[unfold] expandArea response for "${area.name}":`, {
         hasIntent: !!expandResponse.intent,
         intentType: expandResponse.intent?.type,
-        childrenCount: hasChildren ? expandResponse.intent!.children!.length : 0,
+        childrenCount: hasChildren && expandResponse.intent?.type === 'expand_area' ? expandResponse.intent.children.length : 0,
         warnings: expandResponse.warnings,
       });
       
-      if (hasChildren) {
+      if (hasChildren && expandResponse.intent?.type === 'expand_area') {
         // SUCCESS: Add children with groupHint pointing to parent zone
-        const children = expandResponse.intent!.children!;
+        const children = expandResponse.intent.children;
         expandedZones.push(area.name);
         
         // STEP 1: Compute all child sizes and track which are scalable
@@ -238,7 +239,6 @@ Each zone MUST have "Zone", "Wing", "Area", "Facilities", or "Block" in its name
               type: 'fixed',
               value: child.size,
               reasoning: `${child.size}m² (computed from parent "${area.name}" ${areaSize}m²)`,
-              source: { type: 'calculated', value: `Child of ${area.name}` },
             } as AreaFormula,
             groupHint: area.name, // Parent zone becomes the group
           });
@@ -305,7 +305,7 @@ function evaluateSingleFormula(formula: AreaFormula, totalArea: number): number 
       return formula.value || 0;
     case 'ratio': {
       // AI might return 'percentage' (0-100) instead of 'ratio' (0-1)
-      const formulaAny = formula as Record<string, unknown>;
+      const formulaAny = formula as unknown as Record<string, unknown>;
       let ratioValue = formula.ratio || 0;
       
       // Check if AI sent percentage instead of ratio
@@ -566,7 +566,7 @@ function evaluateFormulas(
     switch (formula.type) {
       case 'ratio': {
         // AI might return 'percentage' (0-100) instead of 'ratio' (0-1)
-        const formulaAny = formula as Record<string, unknown>;
+        const formulaAny = formula as unknown as Record<string, unknown>;
         let ratioValue = formula.ratio || 0;
         
         // Check if AI sent percentage instead of ratio

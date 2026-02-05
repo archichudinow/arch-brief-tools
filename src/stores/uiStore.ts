@@ -194,5 +194,11 @@ export const useUIStore = create<UIState>()(
         state.detailLevel = level;
       });
     },
+
+    setExpandDepth: (depth) => {
+      set((state) => {
+        state.expandDepth = depth;
+      });
+    },
   }))
 );
