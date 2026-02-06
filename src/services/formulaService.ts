@@ -13,7 +13,7 @@ import type { UUID, AreaNode, Proposal, CreateAreasProposal, SplitAreaProposal }
 import type { AreaFormula, ProjectScale } from '@/types/formulas';
 import { MIN_AREA_THRESHOLDS } from '@/types/formulas';
 import { describeFormula } from './formulaEngine';
-import { analyzeScale, formatArea, getScaleUnfoldGuidance, detectScale } from './scaleAnalyzer';
+import { formatArea, getScaleUnfoldGuidance } from './scaleAnalyzer';
 import { FORMULA_SYSTEM_PROMPT } from './aiPrompts';
 
 // ============================================
@@ -574,7 +574,7 @@ interface AIAreaSpec {
  * Normalize AI area spec to FormulaAreaSpec
  * Handles both old formula format and new totalArea format
  */
-function normalizeAreaSpec(spec: AIAreaSpec, targetTotal: number): FormulaAreaSpec {
+function normalizeAreaSpec(spec: AIAreaSpec, _targetTotal: number): FormulaAreaSpec {
   // If already has formula, return as-is
   if (spec.formula) {
     return {
@@ -596,6 +596,7 @@ function normalizeAreaSpec(spec: AIAreaSpec, targetTotal: number): FormulaAreaSp
       value: areaPerUnit,
       count: count,
       reasoning: `${totalAreaValue}m² total${count > 1 ? ` (${count} × ${areaPerUnit}m²)` : ''}`,
+      source: { type: 'ai' },
     },
     groupHint: spec.groupHint,
   };

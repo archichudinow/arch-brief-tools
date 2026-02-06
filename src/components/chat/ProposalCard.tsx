@@ -222,7 +222,7 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
         break;
         
       default:
-        console.warn(`Unknown proposal type: ${accepted.type} - skipping`);
+        console.warn(`Unknown proposal type: ${(accepted as { type: string }).type} - skipping`);
         break;
     }
     

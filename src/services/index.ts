@@ -1,5 +1,13 @@
 export * from './aiService';
-export * from './aiValidation';
+export { 
+  validateAgentResponse,
+  validateConsultationResponse,
+  validateParsedBrief,
+  validateProposal,
+  validateEnhancedPrompts,
+  validateBriefExtraction,
+  validateBriefClassification,
+} from './aiValidation';
 export * from './aiPrompts';
 export * from './briefAnalyzer';
 export * from './briefStrategies';

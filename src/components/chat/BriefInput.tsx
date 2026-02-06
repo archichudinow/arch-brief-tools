@@ -647,7 +647,7 @@ Example:
         disabled={!briefText.trim() || inputClassification?.strategy === 'reject'}
         className="mt-4"
       >
-        {inputClassification?.strategy === 'generate' ? (
+        {inputClassification?.strategy === 'redirect_to_agent' ? (
           <>
             <Wand2 className="w-4 h-4 mr-1" />
             Generate Program

@@ -122,10 +122,6 @@ export function ChatPanel() {
     const content = inputValue.trim();
     setInputValue('');
     
-    // Get selected items
-    const selectedNodes = selectedNodeIds.map((id) => nodes[id]).filter(Boolean);
-    const selectedGroups = selectedGroupIds.map((id) => groups[id]).filter(Boolean);
-    
     // Add user message
     addUserMessage(content, selectedNodeIds, selectedGroupIds);
     setLoading(true);
@@ -306,23 +302,11 @@ export function ChatPanel() {
     // Note: We need to use the prompt directly since setInputValue is async
     const content = option.prompt;
     
-    // Get selected items
-    const selectedNodes = selectedNodeIds.map((id) => nodes[id]).filter(Boolean);
-    
     // Add user message
     addUserMessage(content, selectedNodeIds, selectedGroupIds);
     setLoading(true);
     
     try {
-      // Build action context
-      const actionContext: ActionContext = {
-        nodes,
-        groups,
-        detailLevel,
-        prompt: content,
-        projectContext: projectContext || undefined,
-      };
-      
       // Always use the full agent
       console.log('[FullAgent] Using OpenAI tool-calling agent for enhanced prompt');
       
