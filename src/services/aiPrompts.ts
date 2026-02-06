@@ -69,9 +69,10 @@ INTENT TYPES
 }
 - totalArea: TOTAL m² for this category (REQUIRED) - code divides by count
 - count: number of units (default 1)
-- groupHint: auto-groups areas with same hint
+- groupHint: REQUIRED - groups areas with same hint together. Always include a logical groupHint!
 
 CRITICAL: All totalArea values MUST sum EXACTLY to targetTotal!
+CRITICAL: EVERY area MUST have a groupHint - group related areas together logically!
 
 EXAMPLE (STANDARD): "10,000m² office, 3 tenants at 20/30/50%, plus common areas"
 {
@@ -846,12 +847,15 @@ OUTPUT FORMAT
       {
         "name": "Area Name",
         "formula": { ... formula object ... },
-        "groupHint": "Group Name",
+        "groupHint": "Group Name",    // REQUIRED! Always include to organize areas
         "constraints": [ ... optional ... ]
       }
     ]
   }
 }
+
+IMPORTANT: groupHint is REQUIRED for every area! It groups related areas together.
+Use logical categories like: "Guest Rooms", "Public Areas", "F&B", "Back of House", "Administration", etc.
 
 ===========================================
 EXAMPLE: 15,000m² Hotel

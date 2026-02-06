@@ -5,66 +5,73 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { Layers, GitBranch, Network } from 'lucide-react';
+import { Layers, LayoutGrid, Network } from 'lucide-react';
+import type { ExpandDetailLevel } from '@/services';
 
-export type ExploreDepth = 1 | 2 | 3;
-
-interface ExpandDepthSelectorProps {
-  depth: ExploreDepth;
-  onDepthChange: (depth: ExploreDepth) => void;
+interface DetailLevelSelectorProps {
+  level: ExpandDetailLevel;
+  onLevelChange: (level: ExpandDetailLevel) => void;
 }
 
-const DEPTHS: Array<{
-  value: ExploreDepth;
+const DETAIL_LEVELS: Array<{
+  value: ExpandDetailLevel;
   label: string;
+  shortLabel: string;
   description: string;
   icon: typeof Layers;
 }> = [
   {
-    value: 1,
-    label: '1 Level',
-    description: 'Break into immediate sub-areas',
+    value: 'abstract',
+    label: 'Abstract',
+    shortLabel: 'Abs',
+    description: '4-6 major functional zones',
     icon: Layers,
   },
   {
-    value: 2,
-    label: '2 Levels',
-    description: 'Break with one level of detail',
-    icon: GitBranch,
+    value: 'typical',
+    label: 'Typical',
+    shortLabel: 'Typ',
+    description: '6-10 functional area types',
+    icon: LayoutGrid,
   },
   {
-    value: 3,
-    label: '3 Levels',
-    description: 'Full hierarchical breakdown',
+    value: 'detailed',
+    label: 'Detailed',
+    shortLabel: 'Det',
+    description: '12-20 specific spaces with counts',
     icon: Network,
   },
 ];
 
-export function ExpandDepthSelector({ depth, onDepthChange }: ExpandDepthSelectorProps) {
+export function DetailLevelSelector({ level, onLevelChange }: DetailLevelSelectorProps) {
   return (
     <TooltipProvider>
       <div className="flex items-center gap-1">
-        <span className="text-xs text-muted-foreground mr-1">Expand:</span>
-        {DEPTHS.map((level) => {
-          const Icon = level.icon;
-          const isActive = depth === level.value;
+        <span className="text-xs text-muted-foreground mr-1">Detail:</span>
+        {DETAIL_LEVELS.map((item) => {
+          const Icon = item.icon;
+          const isActive = level === item.value;
           
           return (
-            <Tooltip key={level.value}>
+            <Tooltip key={item.value}>
               <TooltipTrigger asChild>
                 <Button
-                  variant={isActive ? 'secondary' : 'ghost'}
+                  variant={isActive ? 'default' : 'ghost'}
                   size="sm"
-                  className={`h-6 px-2 text-xs ${isActive ? 'bg-secondary' : ''}`}
-                  onClick={() => onDepthChange(level.value)}
+                  className={`h-7 px-2.5 text-xs font-medium transition-all ${
+                    isActive 
+                      ? 'bg-primary text-primary-foreground shadow-sm' 
+                      : 'hover:bg-muted text-muted-foreground hover:text-foreground'
+                  }`}
+                  onClick={() => onLevelChange(item.value)}
                 >
-                  <Icon className="w-3 h-3 mr-1" />
-                  {level.value}
+                  <Icon className={`w-3.5 h-3.5 mr-1 ${isActive ? '' : 'opacity-70'}`} />
+                  {item.shortLabel}
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom" className="max-w-[200px]">
-                <p className="font-medium">{level.label}</p>
-                <p className="text-xs text-muted-foreground">{level.description}</p>
+                <p className="font-medium">{item.label}</p>
+                <p className="text-xs text-muted-foreground">{item.description}</p>
               </TooltipContent>
             </Tooltip>
           );
@@ -73,3 +80,7 @@ export function ExpandDepthSelector({ depth, onDepthChange }: ExpandDepthSelecto
     </TooltipProvider>
   );
 }
+
+// Legacy export for backward compatibility
+export type ExploreDepth = 1 | 2 | 3;
+export const ExpandDepthSelector = DetailLevelSelector;

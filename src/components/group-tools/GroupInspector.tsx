@@ -168,8 +168,8 @@ export function GroupInspector() {
             <div className="space-y-2">
               <Label className="text-xs text-muted-foreground">Group Actions</Label>
               
-              {/* Split actions - only show if group has 2+ members */}
-              {memberDetails.length >= 2 && (
+              {/* Split actions - show if group has 2+ total units (can split even 1 area with count > 1) */}
+              {totalUnits >= 2 && (
                 <>
                   <Button
                     variant="outline"

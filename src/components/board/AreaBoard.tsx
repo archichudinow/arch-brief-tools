@@ -113,34 +113,124 @@ export function AreaBoard() {
   // Calculate layout with size overrides
   const layout = useGridLayout(nodes, groups, dimensions.width, dimensions.height, groupSizeOverrides);
 
+  // Ref to track latest group positions without triggering effect re-runs
+  const groupPositionsRef = useRef(groupPositions);
+  groupPositionsRef.current = groupPositions;
+  
   // Initialize positions for new groups - only once per group
   // Use a ref to track which groups have been initialized to avoid re-running
   const initializedGroupsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
+    // Find the bottom of existing groups to place new groups below
+    let maxBottom = 20; // Start position if no groups exist
+    const GROUP_GAP = 20;
+    
+    const currentPositions = groupPositionsRef.current;
+    
+    // Calculate the bottom edge of all existing positioned groups
     for (const group of layout.groups) {
-      // Only initialize if not already in store AND not already initialized this session
-      if (!groupPositions[group.id] && !initializedGroupsRef.current.has(group.id)) {
-        initializedGroupsRef.current.add(group.id);
-        setGroupPosition(group.id, group.x, group.y);
+      const storedPos = currentPositions[group.id];
+      if (storedPos) {
+        const bottom = storedPos.y + group.height;
+        maxBottom = Math.max(maxBottom, bottom);
       }
     }
-  }, [layout.groups]); // Intentionally exclude groupPositions to avoid re-running on drag
+    
+    // Position new groups
+    let newGroupX = 20;
+    let newGroupY = maxBottom > 20 ? maxBottom + GROUP_GAP : 20;
+    let rowHeight = 0;
+    const MAX_ROW_WIDTH = 1200;
+    
+    for (const group of layout.groups) {
+      // Only initialize if not already in store AND not already initialized this session
+      if (!currentPositions[group.id] && !initializedGroupsRef.current.has(group.id)) {
+        initializedGroupsRef.current.add(group.id);
+        
+        // Check if we need to wrap to next row
+        if (newGroupX + group.width > MAX_ROW_WIDTH && newGroupX !== 20) {
+          newGroupX = 20;
+          newGroupY += rowHeight + GROUP_GAP;
+          rowHeight = 0;
+        }
+        
+        setGroupPosition(group.id, newGroupX, newGroupY);
+        
+        newGroupX += group.width + GROUP_GAP;
+        rowHeight = Math.max(rowHeight, group.height);
+      }
+    }
+  }, [layout.groups, setGroupPosition]); // Intentionally exclude groupPositions to avoid re-running on drag
+
+  // Track last selected node for range selection (Ctrl+Shift+click)
+  const lastSelectedNodeRef = useRef<{ id: string; groupId: string } | null>(null);
 
   // Handle node selection
   const handleSelectNode = useCallback(
-    (id: string, append: boolean) => {
-      console.log('handleSelectNode called:', { id, append, selectedNodeIds });
+    (id: string, append: boolean, rangeSelect?: boolean) => {
+      console.log('handleSelectNode called:', { id, append, rangeSelect, selectedNodeIds });
+      
+      // Find which group this node belongs to
+      const findNodeGroup = (nodeId: string): string | null => {
+        for (const group of layout.groups) {
+          if (group.children.some(c => c.id === nodeId)) {
+            return group.id;
+          }
+        }
+        return null;
+      };
+      
+      const currentGroupId = findNodeGroup(id);
+      
+      // Range selection: Shift+click selects all nodes between last selected and current
+      if (rangeSelect && lastSelectedNodeRef.current) {
+        const lastNodeId = lastSelectedNodeRef.current.id;
+        const lastGroupId = lastSelectedNodeRef.current.groupId;
+        
+        // Only range select within same group
+        if (currentGroupId && currentGroupId === lastGroupId) {
+          const group = layout.groups.find(g => g.id === currentGroupId);
+          if (group) {
+            // Get indices of both nodes in the group's children array
+            const childIds = group.children.map(c => c.id);
+            const lastIdx = childIds.indexOf(lastNodeId);
+            const currentIdx = childIds.indexOf(id);
+            
+            if (lastIdx !== -1 && currentIdx !== -1) {
+              // Select all nodes between (inclusive)
+              const startIdx = Math.min(lastIdx, currentIdx);
+              const endIdx = Math.max(lastIdx, currentIdx);
+              const rangeIds = childIds.slice(startIdx, endIdx + 1);
+              
+              // If Ctrl+Shift: append range to existing selection
+              // If just Shift: replace selection with range
+              selectNodes(rangeIds, append);
+              // Keep last selected as anchor for further range selections
+              return;
+            }
+          }
+        }
+      }
+      
+      // Normal selection logic
       const isSelected = selectedNodeIds.includes(id);
       if (append) {
         selectNodes([id], true);
       } else if (isSelected && selectedNodeIds.length === 1) {
         selectNodes([]);
+        lastSelectedNodeRef.current = null;
+        return;
       } else {
         // selectNodes already clears groups when append=false
         selectNodes([id]);
       }
+      
+      // Track last selected for range selection
+      if (currentGroupId) {
+        lastSelectedNodeRef.current = { id, groupId: currentGroupId };
+      }
     },
-    [selectedNodeIds, selectNodes]
+    [selectedNodeIds, selectNodes, layout.groups]
   );
 
   // Handle group selection
@@ -164,10 +254,6 @@ export function AreaBoard() {
   );
 
   // Handle group dragging - update absolute position
-  // Use a ref to always have access to latest positions without recreating callback
-  const groupPositionsRef = useRef(groupPositions);
-  groupPositionsRef.current = groupPositions;
-  
   // Ref for selected groups to avoid recreating callback
   const selectedGroupIdsRef = useRef(selectedGroupIds);
   selectedGroupIdsRef.current = selectedGroupIds;

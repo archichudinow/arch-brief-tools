@@ -261,6 +261,24 @@ export const INVALID_INPUT_RESPONSE = {
 };
 
 // ============================================
+// REDIRECT TO AGENT RESPONSE (for generation prompts)
+// ============================================
+
+export const REDIRECT_TO_AGENT_RESPONSE = {
+  areas: [],
+  detectedGroups: [],
+  parsedTotal: 0,
+  projectContext: '',
+  isRedirectToAgent: true,
+  ambiguities: [
+    'This looks like a generation request rather than a brief to parse',
+    'Please use the Agent Chat to generate building programs from prompts',
+    'The Brief Parser is designed to extract areas from existing briefs/documents',
+    'Switch to Agent Chat mode and enter your request there'
+  ],
+};
+
+// ============================================
 // UNFOLD AREA PROMPT - For recursive detail expansion
 // ============================================
 

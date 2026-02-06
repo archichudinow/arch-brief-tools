@@ -42,17 +42,43 @@ const DEFAULT_OPTIONS: Required<EvaluationOptions> = {
  */
 export function describeFormula(formula: AreaFormula): string {
   switch (formula.type) {
-    case 'ratio':
+    case 'ratio': {
+      // Handle both 'ratio' (0-1) and 'percentage' (0-100) from AI
+      const formulaAny = formula as unknown as Record<string, unknown>;
+      let ratioValue = formula.ratio || 0;
+      
+      // Check if AI sent percentage instead of ratio
+      if (!ratioValue && typeof formulaAny.percentage === 'number') {
+        ratioValue = (formulaAny.percentage as number) / 100;
+      }
+      
+      // Detect if ratio looks like a percentage (> 1)
+      if (ratioValue > 1) {
+        ratioValue = ratioValue / 100;
+      }
+      
       const refName = formula.reference === 'parent' ? 'parent' 
         : formula.reference === 'total' ? 'project total'
         : formula.reference === 'sibling_sum' ? 'sibling sum'
         : 'reference';
-      return `${(formula.ratio * 100).toFixed(1)}% of ${refName}`;
+      
+      // Use reasoning if available
+      if ('reasoning' in formula && formula.reasoning) {
+        return formula.reasoning;
+      }
+      
+      return `${(ratioValue * 100).toFixed(1)}% of ${refName}`;
+    }
     
-    case 'unit_based':
+    case 'unit_based': {
       const mult = formula.multiplier && formula.multiplier !== 1 
         ? ` × ${formula.multiplier}` : '';
+      // Use reasoning if available
+      if ('reasoning' in formula && formula.reasoning) {
+        return formula.reasoning;
+      }
       return `${formula.areaPerUnit}m² × ${formula.unitCount} units${mult}`;
+    }
     
     case 'remainder':
       return `remainder after siblings`;
@@ -62,20 +88,22 @@ export function describeFormula(formula: AreaFormula): string {
         ? `fixed: ${formula.value}m² × ${formula.count}`
         : `fixed: ${formula.value}m²`;
     
-    case 'derived':
+    case 'derived': {
       const opDesc = formula.operation === 'ratio' 
         ? `${(formula.value * 100).toFixed(1)}% of`
         : formula.operation === 'copy' ? 'copy of' : `offset from`;
       return `${opDesc} source node`;
+    }
     
     case 'distributed':
       return `${formula.shareCount}/${formula.totalShares} of pool`;
     
-    case 'fallback':
+    case 'fallback': {
       const methodDesc = formula.method === 'equal_share' ? 'equal share (best guess)'
         : formula.method === 'typology_guess' ? 'typology estimate'
         : 'minimum viable';
       return `⚠️ ${methodDesc} - ${formula.missingInfo.join(', ')}`;
+    }
     
     default:
       return 'unknown formula';

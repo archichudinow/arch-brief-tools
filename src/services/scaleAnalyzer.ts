@@ -410,6 +410,88 @@ export function formatArea(area: number): string {
   return `${Math.round(area)} m²`;
 }
 
+// ============================================
+// SCALE HIERARCHY FOR UNFOLDING
+// ============================================
+
+/**
+ * Scale hierarchy - defines progression from large to small
+ */
+const SCALE_HIERARCHY: ProjectScale[] = ['urban', 'masterplan', 'landscape', 'architecture', 'interior'];
+
+/**
+ * Get the next scale down in hierarchy
+ */
+export function getNextScaleDown(currentScale: ProjectScale): ProjectScale | null {
+  const idx = SCALE_HIERARCHY.indexOf(currentScale);
+  if (idx === -1 || idx === SCALE_HIERARCHY.length - 1) return null;
+  return SCALE_HIERARCHY[idx + 1];
+}
+
+/**
+ * Get appropriate unfold guidance based on area scale
+ * Returns what TYPE of children should be produced, not how many
+ */
+export function getScaleUnfoldGuidance(area: number): {
+  currentScale: ProjectScale;
+  nextScale: ProjectScale | null;
+  childrenType: string;
+  childSizeRange: { min: number; max: number; typical: number };
+  examples: string[];
+  constraint: string;
+} {
+  const currentScale = detectScale(area);
+  const nextScale = getNextScaleDown(currentScale);
+  
+  // Define what children should look like at each scale
+  const guidance: Record<ProjectScale, {
+    childrenType: string;
+    childSizeRange: { min: number; max: number; typical: number };
+    examples: string[];
+  }> = {
+    urban: {
+      childrenType: 'districts or major zones',
+      childSizeRange: { min: 50_000, max: 500_000, typical: 150_000 },
+      examples: ['Residential District', 'Commercial Zone', 'Green Corridor', 'Mixed-Use Hub', 'Infrastructure Zone'],
+    },
+    masterplan: {
+      childrenType: 'building plots, streets, or public spaces',
+      childSizeRange: { min: 5_000, max: 100_000, typical: 20_000 },
+      examples: ['Office Complex Plot', 'Residential Block', 'Central Plaza', 'Green Park', 'Retail Promenade'],
+    },
+    landscape: {
+      childrenType: 'buildings or major outdoor areas',
+      childSizeRange: { min: 500, max: 20_000, typical: 5_000 },
+      examples: ['Main Building', 'Parking Structure', 'Gardens', 'Service Building', 'Entrance Plaza'],
+    },
+    architecture: {
+      childrenType: 'floors, departments, or functional zones',
+      childSizeRange: { min: 50, max: 5_000, typical: 500 },
+      examples: ['Lobby Zone', 'Guest Floors', 'Back of House', 'Restaurant Wing', 'Meeting Level'],
+    },
+    interior: {
+      childrenType: 'rooms or specific spaces',
+      childSizeRange: { min: 5, max: 200, typical: 30 },
+      examples: ['Reception', 'Waiting Area', 'Meeting Room', 'Storage', 'Restrooms'],
+    },
+  };
+  
+  const currentGuidance = guidance[currentScale];
+  
+  // Calculate constraint based on area
+  const maxChildren = Math.floor(area / currentGuidance.childSizeRange.min);
+  const minChildren = Math.max(2, Math.ceil(area / currentGuidance.childSizeRange.max));
+  
+  return {
+    currentScale,
+    nextScale,
+    childrenType: currentGuidance.childrenType,
+    childSizeRange: currentGuidance.childSizeRange,
+    examples: currentGuidance.examples,
+    constraint: `Generate ${minChildren}-${Math.min(maxChildren, 10)} ${currentGuidance.childrenType}. Each should be ${formatArea(currentGuidance.childSizeRange.min)}-${formatArea(currentGuidance.childSizeRange.max)}.`,
+  };
+}
+
 /**
  * Get scale-appropriate breakdown suggestions
  */

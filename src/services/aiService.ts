@@ -34,12 +34,10 @@ import {
   type InputClassification,
 } from './briefAnalyzer';
 import {
-  GENERATE_PROMPT,
-  GENERATE_ABSTRACT_PROMPT,
   EXTRACT_TOLERANT_PROMPT,
   RECONCILIATION_PROMPT,
   INVALID_INPUT_RESPONSE,
-  UNFOLD_AREA_PROMPT,
+  REDIRECT_TO_AGENT_RESPONSE,
   buildPrompt,
   formatAreasForReconciliation,
   GROUP_COLORS,
@@ -1013,17 +1011,10 @@ function buildParsedBrief(
   };
 }
 
-export interface ParseBriefOptions {
-  /** Generate abstract zones instead of detailed areas (for recursive unfold) */
-  useAbstract?: boolean;
-}
-
 export async function parseBrief(
-  briefText: string,
-  options: ParseBriefOptions = {}
+  briefText: string
 ): Promise<ParsedBrief & { inputClassification?: InputClassification }> {
   const apiKey = getApiKey();
-  const { useAbstract = false } = options;
   
   // Step 1: Analyze input to determine strategy
   const classification = analyzeInput(briefText);
@@ -1032,7 +1023,6 @@ export async function parseBrief(
     quality: classification.quality,
     strategy: classification.strategy,
     confidence: classification.confidence,
-    useAbstract,
   });
   
   // Step 2: Handle based on strategy
@@ -1044,10 +1034,10 @@ export async function parseBrief(
         inputClassification: classification,
       };
     
-    case 'generate':
-      console.log(`Using GENERATE strategy (${useAbstract ? 'abstract' : 'detailed'}) for prompt input`);
+    case 'redirect_to_agent':
+      console.log('Input is a generation prompt - redirecting to agent chat');
       return {
-        ...(await parseWithGenerateStrategy(classification.cleanedText, apiKey, useAbstract)),
+        ...REDIRECT_TO_AGENT_RESPONSE,
         inputClassification: classification,
       };
     
@@ -1066,151 +1056,6 @@ export async function parseBrief(
         inputClassification: classification,
       };
   }
-}
-
-// ============================================
-// STRATEGY: GENERATE (for prompts)
-// ============================================
-
-async function parseWithGenerateStrategy(promptText: string, apiKey: string, useAbstract = false): Promise<ParsedBrief> {
-  console.log(`Starting ${useAbstract ? 'abstract' : 'detailed'} generate mode parsing...`);
-  
-  const promptTemplate = useAbstract ? GENERATE_ABSTRACT_PROMPT : GENERATE_PROMPT;
-  const prompt = buildPrompt(promptTemplate, { userInput: promptText });
-  
-  const response = await fetch(OPENAI_API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: 'gpt-4o',
-      messages: [
-        { role: 'user', content: prompt },
-      ],
-      response_format: { type: 'json_object' },
-      temperature: 0.7, // Higher for creativity
-    }),
-  });
-  
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw {
-      type: 'api_error',
-      message: error.error?.message || `Generate failed: ${response.status}`,
-    } as AIError;
-  }
-  
-  const data = await response.json();
-  const content = data.choices?.[0]?.message?.content || '';
-  
-  console.log('Generate response:', content);
-  
-  let parsed: Record<string, unknown>;
-  try {
-    parsed = JSON.parse(content);
-  } catch {
-    throw { type: 'parse_error', message: 'Invalid JSON in generate response' } as AIError;
-  }
-  
-  // Get target area from response
-  const targetArea = (parsed.targetArea as number) || 0;
-  
-  // Handle both percentage-based (new) and area-based (legacy) responses
-  const rawAreas = (parsed.areas as Array<{
-    name: string;
-    percentage?: number;
-    areaPerUnit?: number;
-    count?: number;
-    groupHint?: string;
-    aiNote?: string;
-  }>) || [];
-  
-  const detectedGroups = (parsed.detectedGroups as Array<{ name: string; color: string; areaNames: string[] }>) || [];
-  
-  let formattedAreas: Array<{
-    name: string;
-    areaPerUnit: number;
-    count: number;
-    groupHint?: string;
-    aiNote?: string;
-  }>;
-  
-  // Check if response uses percentages (new format) or absolute areas (legacy)
-  const usesPercentages = rawAreas.length > 0 && rawAreas[0].percentage !== undefined;
-  
-  if (usesPercentages && targetArea > 0) {
-    // NEW: Convert percentages to exact areas using deterministic math
-    console.log('Converting percentages to exact areas...');
-    
-    const totalPercent = rawAreas.reduce((sum, a) => sum + (a.percentage || 0), 0);
-    
-    // Convert each area
-    const convertedAreas = rawAreas.map(a => {
-      const normalizedPercent = totalPercent > 0 
-        ? ((a.percentage || 0) / totalPercent) * 100 
-        : 100 / rawAreas.length;
-      const exactArea = Math.round((normalizedPercent / 100) * targetArea);
-      
-      return {
-        name: a.name,
-        areaPerUnit: exactArea,
-        count: 1,
-        groupHint: a.groupHint,
-        aiNote: a.aiNote ? `${a.aiNote} (${a.percentage}%)` : `${a.percentage}% of program`,
-      };
-    });
-    
-    // Fix rounding errors by adjusting largest area
-    const currentTotal = convertedAreas.reduce((sum, a) => sum + a.areaPerUnit, 0);
-    const roundingError = targetArea - currentTotal;
-    
-    if (roundingError !== 0 && convertedAreas.length > 0) {
-      const largestIndex = convertedAreas.reduce(
-        (maxIdx, area, idx, arr) => 
-          area.areaPerUnit > arr[maxIdx].areaPerUnit ? idx : maxIdx,
-        0
-      );
-      convertedAreas[largestIndex].areaPerUnit += roundingError;
-    }
-    
-    formattedAreas = convertedAreas;
-    
-    // Verify total
-    const verifiedTotal = formattedAreas.reduce((sum, a) => sum + a.areaPerUnit * a.count, 0);
-    console.log(`Target: ${targetArea}m², Actual: ${verifiedTotal}m², Match: ${verifiedTotal === targetArea}`);
-  } else {
-    // LEGACY: Use absolute areas as provided
-    console.log('Using legacy absolute areas format...');
-    formattedAreas = rawAreas.map(a => ({
-      name: a.name,
-      areaPerUnit: a.areaPerUnit || 0,
-      count: a.count || 1,
-      groupHint: a.groupHint,
-      aiNote: a.aiNote,
-    }));
-  }
-  
-  const parsedTotal = formattedAreas.reduce((sum, a) => sum + a.areaPerUnit * a.count, 0);
-  
-  return {
-    areas: formattedAreas,
-    detectedGroups: detectedGroups.length > 0 ? detectedGroups.map((g, i) => ({
-      name: g.name,
-      color: g.color || GROUP_COLORS[i % GROUP_COLORS.length],
-      areaNames: g.areaNames,
-    })) : undefined,
-    hasGroupStructure: detectedGroups.length > 0,
-    briefTotal: targetArea || null,
-    parsedTotal,
-    projectContext: (parsed.projectContext as string) || (parsed.interpretation as string) || '',
-    suggestedAreas: [],
-    ambiguities: [
-      ...(parsed.assumptions as string[] || []).map(a => `Assumption: ${a}`),
-      ...(parsed.suggestions as string[] || []).map(s => `Suggestion: ${s}`),
-    ],
-  };
 }
 
 // ============================================
@@ -1654,232 +1499,4 @@ export function generateProjectSummary(
     return `${projectContext}\n\n${summary}`;
   }
   return summary;
-}
-
-// ============================================
-// RECURSIVE UNFOLD SYSTEM
-// ============================================
-
-export type DetailDepth = 1 | 2 | 3;
-
-export interface UnfoldableArea {
-  id: string;
-  name: string;
-  areaPerUnit: number;
-  count: number;
-  groupHint?: string;
-  aiNote?: string;
-  depth: number;
-  parentId: string | null;
-  children?: UnfoldableArea[];
-  isTerminal?: boolean;
-}
-
-export interface UnfoldResult {
-  decision: 'terminal' | 'unfold';
-  reasoning: string;
-  subAreas?: Array<{
-    name: string;
-    percentage: number;
-    aiNote?: string;
-  }>;
-}
-
-/**
- * Determines if an area should be unfolded based on heuristics
- * Quick check before calling AI to save API calls
- */
-function shouldConsiderUnfold(area: UnfoldableArea, maxDepth: number): boolean {
-  // Already at max depth
-  if (area.depth >= maxDepth) return false;
-  
-  // Too small to unfold meaningfully
-  if (area.areaPerUnit < 30) return false;
-  
-  // Terminal keywords that indicate specific single-purpose spaces
-  const terminalKeywords = [
-    'toilet', 'restroom', 'wc', 'bathroom', 'lavatory',
-    'closet', 'locker',
-    'parking space', 'parking spot',
-    'hotel room', 'guest room', 'bedroom',
-    'office room', 'private office',
-    'individual', 'single',
-    'elevator', 'lift', 'escalator', 'stair',
-    'field', 'pitch', 'court', 'pool', 'track',
-    'corridor', 'hallway', 'passage',
-  ];
-  
-  const nameLower = area.name.toLowerCase();
-  if (terminalKeywords.some(kw => nameLower.includes(kw))) {
-    return false;
-  }
-  
-  // Abstract keywords that usually need unfolding
-  const abstractKeywords = [
-    'area', 'zone', 'section', 'wing', 'block',
-    'facilities', 'amenities', 'services',
-    'spaces', 'rooms', 'quarters',
-    'department', 'division',
-    'indoor', 'outdoor',
-    'support', 'back-of-house', 'boh',
-    'public', 'private',
-    'mixed', 'multi',
-  ];
-  
-  // Large areas (> 200m²) or abstract names should consider unfolding
-  const isLarge = area.areaPerUnit > 200;
-  const isAbstract = abstractKeywords.some(kw => nameLower.includes(kw));
-  
-  return isLarge || isAbstract;
-}
-
-/**
- * Call AI to decide if area should unfold and get sub-areas
- */
-async function unfoldSingleArea(
-  area: UnfoldableArea,
-  projectContext: string,
-  apiKey: string
-): Promise<UnfoldResult> {
-  const prompt = buildPrompt(UNFOLD_AREA_PROMPT, {
-    areaName: area.name,
-    areaSize: area.areaPerUnit.toString(),
-    projectContext: projectContext || 'General building',
-    currentDepth: area.depth.toString(),
-  });
-  
-  const response = await fetch(OPENAI_API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: 'gpt-4o',
-      messages: [{ role: 'user', content: prompt }],
-      response_format: { type: 'json_object' },
-      temperature: 0.5,
-    }),
-  });
-  
-  if (!response.ok) {
-    console.warn(`Unfold API error for "${area.name}": ${response.status}`);
-    return { decision: 'terminal', reasoning: 'API error - treating as terminal' };
-  }
-  
-  const data = await response.json();
-  const content = data.choices?.[0]?.message?.content || '';
-  
-  try {
-    const parsed = JSON.parse(content) as UnfoldResult;
-    return parsed;
-  } catch {
-    console.warn(`Failed to parse unfold response for "${area.name}"`);
-    return { decision: 'terminal', reasoning: 'Parse error - treating as terminal' };
-  }
-}
-
-/**
- * Recursively unfold areas up to specified depth
- * Returns tree structure with children populated
- */
-export async function recursiveUnfold(
-  areas: Array<{
-    name: string;
-    areaPerUnit: number;
-    count: number;
-    groupHint?: string;
-    aiNote?: string;
-  }>,
-  projectContext: string,
-  maxDepth: DetailDepth = 2,
-  onProgress?: (processed: number, total: number) => void
-): Promise<UnfoldableArea[]> {
-  const apiKey = getApiKey();
-  let idCounter = 0;
-  
-  // Convert initial areas to UnfoldableArea format
-  const rootAreas: UnfoldableArea[] = areas.map(a => ({
-    ...a,
-    id: `area-${++idCounter}`,
-    depth: 1,
-    parentId: null,
-    children: [],
-    isTerminal: false,
-  }));
-  
-  // Queue of areas to potentially unfold
-  const queue: UnfoldableArea[] = [...rootAreas];
-  let processed = 0;
-  const totalInitial = queue.length;
-  
-  onProgress?.(0, totalInitial);
-  
-  while (queue.length > 0) {
-    const area = queue.shift()!;
-    processed++;
-    
-    // Check if we should consider unfolding
-    if (!shouldConsiderUnfold(area, maxDepth)) {
-      area.isTerminal = true;
-      onProgress?.(processed, totalInitial + queue.length);
-      continue;
-    }
-    
-    console.log(`[unfold] Analyzing "${area.name}" (${area.areaPerUnit}m²)...`);
-    
-    // Call AI to decide
-    const result = await unfoldSingleArea(area, projectContext, apiKey);
-    
-    if (result.decision === 'terminal' || !result.subAreas || result.subAreas.length === 0) {
-      area.isTerminal = true;
-      console.log(`[unfold]   → Terminal: ${result.reasoning}`);
-      onProgress?.(processed, totalInitial + queue.length);
-      continue;
-    }
-    
-    console.log(`[unfold]   → Unfolding into ${result.subAreas.length} sub-areas`);
-    
-    // Create child areas
-    const children: UnfoldableArea[] = result.subAreas.map(sub => {
-      const childArea = Math.round((sub.percentage / 100) * area.areaPerUnit);
-      return {
-        id: `area-${++idCounter}`,
-        name: sub.name,
-        areaPerUnit: childArea,
-        count: 1,
-        groupHint: area.name, // Use parent name as group hint
-        aiNote: sub.aiNote,
-        depth: area.depth + 1,
-        parentId: area.id,
-        children: [],
-        isTerminal: false,
-      };
-    });
-    
-    area.children = children;
-    
-    // Add children to queue for potential further unfolding
-    queue.push(...children);
-    onProgress?.(processed, totalInitial + queue.length);
-    
-    // Small delay to avoid rate limiting
-    await new Promise(resolve => setTimeout(resolve, 200));
-  }
-  
-  console.log(`[unfold] Completed: processed ${processed} areas`);
-  
-  // Return root areas with tree structure intact
-  return rootAreas;
-}
-
-/**
- * Map detail level to depth
- */
-export function detailLevelToDepth(level: 'abstract' | 'standard' | 'detailed'): DetailDepth {
-  switch (level) {
-    case 'abstract': return 1;
-    case 'standard': return 2;
-    case 'detailed': return 3;
-  }
 }

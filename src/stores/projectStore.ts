@@ -1413,6 +1413,7 @@ export const useProjectStore = create<ProjectState>()(
      * Split a group into N equal parts.
      * Creates N copies of the group, each with the same areas but counts divided by N.
      * Example: Living/bedroom 80×30m² split into 8 → 8 groups each with Living/bedroom 10×30m²
+     * Example: Reception area 1×10m² split into 8 → 8 groups each with Reception area 1×1.25m²
      */
     splitGroupEqual: (groupId, parts, nameSuffix = 'Unit') => {
       const group = get().groups[groupId];
@@ -1425,17 +1426,38 @@ export const useProjectStore = create<ProjectState>()(
       const baseColor = group.color;
       const newGroupIds: string[] = [];
 
-      // For each area, we need to split its count into N parts
-      // Calculate how counts will be distributed
-      const countDistributions: Record<string, number[]> = {};
+      // For each area, determine how to split it:
+      // - If count >= parts: split the count (distribute units)
+      // - If count < parts: split the area itself (divide areaPerUnit)
+      interface SplitInfo {
+        splitByCount: boolean;
+        countDistribution: number[];  // Used when splitting by count
+        areaPerUnit: number;          // Used when splitting by area
+      }
+      
+      const splitInfos: Record<string, SplitInfo> = {};
+      
       for (const node of memberNodes) {
-        const baseCount = Math.floor(node.count / parts);
-        const remainder = node.count % parts;
-        
-        // Distribute: first 'remainder' groups get one extra
-        countDistributions[node.id] = Array.from({ length: parts }, (_, i) => 
-          baseCount + (i < remainder ? 1 : 0)
-        );
+        if (node.count >= parts) {
+          // Split by count - distribute units across groups
+          const baseCount = Math.floor(node.count / parts);
+          const remainder = node.count % parts;
+          splitInfos[node.id] = {
+            splitByCount: true,
+            countDistribution: Array.from({ length: parts }, (_, i) => 
+              baseCount + (i < remainder ? 1 : 0)
+            ),
+            areaPerUnit: node.areaPerUnit,
+          };
+        } else {
+          // Split by area - each group gets count=1 with divided area
+          const dividedArea = node.areaPerUnit / parts;
+          splitInfos[node.id] = {
+            splitByCount: false,
+            countDistribution: Array.from({ length: parts }, () => 1),
+            areaPerUnit: dividedArea,
+          };
+        }
       }
 
       set((state) => {
@@ -1450,11 +1472,12 @@ export const useProjectStore = create<ProjectState>()(
 
           const newMemberIds: string[] = [];
 
-          // For each original area, create a copy with split count
+          // For each original area, create a copy with split count or area
           for (const node of memberNodes) {
-            const splitCount = countDistributions[node.id][i];
+            const info = splitInfos[node.id];
+            const splitCount = info.countDistribution[i];
             
-            // Skip if this split has 0 count
+            // Skip if this split has 0 count (only happens for count-based splits)
             if (splitCount <= 0) continue;
 
             const newNodeId = uuidv4();
@@ -1463,7 +1486,7 @@ export const useProjectStore = create<ProjectState>()(
             state.nodes[newNodeId] = {
               id: newNodeId,
               name: node.name, // Keep same name
-              areaPerUnit: node.areaPerUnit,
+              areaPerUnit: info.splitByCount ? node.areaPerUnit : info.areaPerUnit,
               count: splitCount,
               notes: node.notes ? [...node.notes] : [], // Copy notes
               lockedFields: [],

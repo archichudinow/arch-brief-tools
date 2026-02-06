@@ -7,7 +7,7 @@ interface AreaCardProps {
   rect: LayoutRect;
   isSelected: boolean;
   isDragging?: boolean;
-  onSelect: (id: string, append: boolean) => void;
+  onSelect: (id: string, append: boolean, rangeSelect?: boolean) => void;
   onDragStart?: (id: string) => void;
   onDrag?: (id: string, deltaX: number, deltaY: number) => void;
   onDrop?: (id: string, x: number, y: number, currentGroupId: string | null) => void;
@@ -65,7 +65,10 @@ export function AreaCard({
       return;
     }
     e.stopPropagation();
-    onSelect(id, e.ctrlKey || e.metaKey);
+    // Shift = range selection (select all between), Ctrl/Cmd = append to selection
+    const rangeSelect = e.shiftKey;
+    const append = e.ctrlKey || e.metaKey;
+    onSelect(id, append, rangeSelect);
   };
 
   const handleMouseDown = (e: React.MouseEvent) => {

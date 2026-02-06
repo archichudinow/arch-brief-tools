@@ -4,7 +4,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { useChatStore, useProjectStore, useHistoryStore, useUIStore } from '@/stores';
+import { useChatStore, useProjectStore, useHistoryStore } from '@/stores';
 import { 
   parseBrief, 
   sendChatMessage, 
@@ -13,8 +13,6 @@ import {
   analyzeInput,
   getInputTypeDescription,
   getStrategyDescription,
-  recursiveUnfold,
-  detailLevelToDepth,
   type InputClassification,
 } from '@/services';
 import type { ParsedBrief, ParsedBriefArea } from '@/types';
@@ -38,7 +36,7 @@ import {
   Info
 } from 'lucide-react';
 
-type ParseState = 'input' | 'parsing' | 'unfolding' | 'preview' | 'error' | 'organizing';
+type ParseState = 'input' | 'parsing' | 'preview' | 'error' | 'organizing' | 'redirect';
 
 // Helper to get icon for input type
 function getInputTypeIcon(type: InputClassification['type']) {
@@ -73,15 +71,12 @@ export function BriefInput() {
   const groups = useProjectStore((s) => s.groups);
   const snapshot = useHistoryStore((s) => s.snapshot);
   
-  const detailLevel = useUIStore((s) => s.detailLevel);
-  
   const [parseState, setParseState] = useState<ParseState>('input');
   const [parsedBrief, setParsedBrief] = useState<ParsedBrief | null>(null);
   const [selectedAreas, setSelectedAreas] = useState<Set<number>>(new Set());
   const [selectedSuggested, setSelectedSuggested] = useState<Set<number>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [autoOrganize, setAutoOrganize] = useState(false);
-  const [unfoldProgress, setUnfoldProgress] = useState({ processed: 0, total: 0 });
   
   const addAIMessage = useChatStore((s) => s.addAIMessage);
   
@@ -98,63 +93,14 @@ export function BriefInput() {
     setError(null);
     
     try {
-      // Get max depth from detail level
-      const maxDepth = detailLevelToDepth(detailLevel);
+      // Parse the brief (no recursive unfold - brief parser just extracts)
+      const result = await parseBrief(briefText);
       
-      // Use abstract prompt when we'll be doing recursive unfold
-      const useAbstract = maxDepth > 1;
-      const result = await parseBrief(briefText, { useAbstract });
-      
-      // If we need more detail, run recursive unfold
-      if (maxDepth > 1 && result.areas.length > 0) {
-        setParseState('unfolding');
-        setUnfoldProgress({ processed: 0, total: result.areas.length });
-        
-        // Convert ParsedBriefArea to UnfoldableArea format
-        const unfoldableAreas = result.areas.map((area, i) => ({
-          id: `area-${i}`,
-          name: area.name,
-          areaPerUnit: area.areaPerUnit,
-          count: area.count,
-          groupHint: area.groupHint,
-          aiNote: area.aiNote,
-          depth: 1,
-          parentId: null,
-        }));
-        
-        // Run recursive unfold with progress callback
-        const unfoldedTree = await recursiveUnfold(
-          unfoldableAreas,
-          result.projectContext || briefText,
-          maxDepth,
-          (processed, total) => setUnfoldProgress({ processed, total })
-        );
-        
-        // Flatten tree to areas for preview, keeping hierarchical info
-        const flattenTree = (nodes: typeof unfoldedTree, parentName?: string): typeof result.areas => {
-          const flat: typeof result.areas = [];
-          for (const node of nodes) {
-            if (node.isTerminal || !node.children?.length) {
-              // Terminal node - add as area
-              flat.push({
-                name: node.name,
-                areaPerUnit: node.areaPerUnit,
-                count: node.count,
-                groupHint: parentName || node.groupHint,
-                aiNote: node.aiNote,
-              });
-            } else {
-              // Has children - recurse, passing current name as group hint
-              flat.push(...flattenTree(node.children, node.name));
-            }
-          }
-          return flat;
-        };
-        
-        const unfoldedAreas = flattenTree(unfoldedTree);
-        
-        // Update result with unfolded areas
-        result.areas = unfoldedAreas;
+      // Check if we should redirect to agent chat
+      if (result.isRedirectToAgent) {
+        setParsedBrief(result);
+        setParseState('redirect');
+        return;
       }
       
       setParsedBrief(result);
@@ -336,23 +282,30 @@ export function BriefInput() {
     );
   }
   
-  if (parseState === 'unfolding') {
+  if (parseState === 'redirect') {
     return (
       <div className="flex-1 flex flex-col items-center justify-center gap-4 p-8">
-        <Layers className="w-8 h-8 animate-pulse text-primary" />
-        <p className="text-sm text-muted-foreground">Unfolding areas...</p>
-        <p className="text-xs text-muted-foreground">
-          Analyzing {unfoldProgress.processed} of {unfoldProgress.total} areas
+        <Wand2 className="w-8 h-8 text-primary" />
+        <h3 className="text-lg font-medium">Generation Request Detected</h3>
+        <p className="text-sm text-muted-foreground text-center max-w-md">
+          Your input looks like a request to generate a building program, not a brief to parse.
         </p>
-        <div className="w-48 h-1 bg-muted rounded-full overflow-hidden">
-          <div 
-            className="h-full bg-primary transition-all duration-300"
-            style={{ 
-              width: unfoldProgress.total > 0 
-                ? `${(unfoldProgress.processed / unfoldProgress.total) * 100}%` 
-                : '0%' 
-            }}
-          />
+        <div className="text-xs text-muted-foreground space-y-1 text-center">
+          <p>• Brief Parser extracts areas from existing documents</p>
+          <p>• Agent Chat generates programs from prompts</p>
+        </div>
+        <div className="flex gap-2 mt-4">
+          <Button variant="outline" onClick={handleCancel}>
+            <X className="w-4 h-4 mr-2" />
+            Back to Brief
+          </Button>
+          <Button onClick={() => {
+            setBriefMode(false);
+            // Copy the text to agent chat (via briefText which can be used)
+          }}>
+            <Wand2 className="w-4 h-4 mr-2" />
+            Switch to Agent Chat
+          </Button>
         </div>
       </div>
     );

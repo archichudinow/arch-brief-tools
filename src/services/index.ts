@@ -8,4 +8,9 @@ export * from './intentExecutor';
 export * from './formulaEngine';
 export * from './scaleAnalyzer';
 export * from './formulaService';
-export * from './scaleAnalyzer';
+
+// Action registry system
+export * from './actions';
+
+// Agent system (OpenAI tool-calling)
+export * from './agent';

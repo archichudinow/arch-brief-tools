@@ -8,7 +8,7 @@ interface GroupContainerProps {
   group: GroupLayout;
   selectedNodeIds: string[];
   isGroupSelected?: boolean;
-  onSelectNode: (id: string, append: boolean) => void;
+  onSelectNode: (id: string, append: boolean, rangeSelect?: boolean) => void;
   onSelectGroup?: (groupId: string, append: boolean) => void;
   onDragGroup: (groupId: string, deltaX: number, deltaY: number, initialX?: number, initialY?: number) => void;
   onResizeGroup: (groupId: string, width: number, height: number) => void;

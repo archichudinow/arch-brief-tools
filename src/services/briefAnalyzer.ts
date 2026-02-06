@@ -26,7 +26,7 @@ export interface BriefSignals {
 
 export type InputType = 'prompt' | 'dirty' | 'structured' | 'garbage';
 export type QualityLevel = 'low' | 'medium' | 'high';
-export type ParsingStrategy = 'generate' | 'extract_tolerant' | 'extract_strict' | 'reject';
+export type ParsingStrategy = 'extract_tolerant' | 'extract_strict' | 'redirect_to_agent' | 'reject';
 
 export interface InputClassification {
   type: InputType;
@@ -251,7 +251,7 @@ function assessQuality(signals: BriefSignals, type: InputType): QualityLevel {
 
 function selectStrategy(type: InputType, quality: QualityLevel): ParsingStrategy {
   if (type === 'garbage') return 'reject';
-  if (type === 'prompt') return 'generate';
+  if (type === 'prompt') return 'redirect_to_agent';
   if (type === 'structured' && quality !== 'low') return 'extract_strict';
   return 'extract_tolerant';
 }
@@ -261,6 +261,11 @@ function generateWarnings(signals: BriefSignals, type: InputType): string[] {
   
   if (type === 'garbage') {
     warnings.push('This text does not appear to contain a building program');
+    return warnings;
+  }
+  
+  if (type === 'prompt') {
+    warnings.push('This looks like a generation request, not a brief to parse');
     return warnings;
   }
   
@@ -276,7 +281,7 @@ function generateWarnings(signals: BriefSignals, type: InputType): string[] {
     warnings.push('Mixed units (m² and sqft) - will convert to m²');
   }
   
-  if (signals.unitType === 'none' && type !== 'prompt') {
+  if (signals.unitType === 'none') {
     warnings.push('No area units found - numbers may be counts or areas');
   }
   
@@ -300,6 +305,12 @@ function generateSuggestions(signals: BriefSignals, type: InputType, quality: Qu
     return suggestions;
   }
   
+  if (type === 'prompt') {
+    suggestions.push('Switch to Agent Chat mode to generate a building program');
+    suggestions.push('The Agent can create detailed programs from prompts like this');
+    return suggestions;
+  }
+  
   if (quality === 'low') {
     if (!signals.hasTotals) {
       suggestions.push('Add a total GFA to help validate the parsed areas');
@@ -312,7 +323,7 @@ function generateSuggestions(signals: BriefSignals, type: InputType, quality: Qu
     }
   }
   
-  if (signals.unitType === 'none' && type !== 'prompt') {
+  if (signals.unitType === 'none') {
     suggestions.push('Adding units (m²) helps distinguish areas from counts');
   }
   
@@ -462,9 +473,9 @@ export function getInputTypeDescription(type: InputType): string {
 // Get strategy description
 export function getStrategyDescription(strategy: ParsingStrategy): string {
   switch (strategy) {
-    case 'generate': return 'AI will generate a program based on your request';
     case 'extract_tolerant': return 'AI will extract spaces and infer missing values';
     case 'extract_strict': return 'AI will extract and validate against stated totals';
+    case 'redirect_to_agent': return 'This looks like a generation request - use Agent Chat instead';
     case 'reject': return 'Cannot parse this input';
   }
 }

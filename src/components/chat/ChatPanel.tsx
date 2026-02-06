@@ -6,32 +6,28 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { useChatStore, useUIStore, useProjectStore } from '@/stores';
 import { 
-  sendChatMessage, 
-  buildChatRequest, 
   addIdsToProposals, 
   enhancePrompt, 
-  tryDeterministicOperation,
-  generateFormulaProgram,
   formulaResponseToProposals,
   resolveClarification,
-  expandArea,
+  actionRegistry,
+  runAgent,
+  analyzeInput,
   type EnhancedPrompt,
   type ClarificationOption,
+  type ExpandDetailLevel,
+  type ActionContext,
+  type AgentContext,
 } from '@/services';
 import { MessageBubble } from './MessageBubble';
-import { BriefInput } from './BriefInput';
-import { ExpandDepthSelector, type ExploreDepth } from './ExpandDepthSelector';
+import { DetailLevelSelector } from './ExpandDepthSelector';
 import { ClarificationCard } from './ClarificationCard';
-import type { ScaleClarificationOption, Proposal } from '@/types';
+import type { ScaleClarificationOption } from '@/types';
 import { 
   Send, 
   Loader2, 
   Trash2, 
-  FileText, 
-  MessageSquare,
   Sparkles,
-  Bot,
-  HelpCircle,
   Wand2,
   X,
   Play
@@ -65,12 +61,7 @@ export function ChatPanel() {
   const addSystemMessage = useChatStore((s) => s.addSystemMessage);
   const clearChat = useChatStore((s) => s.clearChat);
   const projectContext = useChatStore((s) => s.projectContext);
-  const briefMode = useChatStore((s) => s.briefMode);
-  const setBriefMode = useChatStore((s) => s.setBriefMode);
   const pendingProposals = useChatStore((s) => s.pendingProposals);
-  const chatMode = useChatStore((s) => s.chatMode);
-  const setChatMode = useChatStore((s) => s.setChatMode);
-  const aiRole = useChatStore((s) => s.aiRole);
   
   const selectedNodeIds = useUIStore((s) => s.selectedNodeIds);
   const selectedGroupIds = useUIStore((s) => s.selectedGroupIds);
@@ -80,32 +71,50 @@ export function ChatPanel() {
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const prevMessageCountRef = useRef(0);
+  const messageRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   
   // Enhanced prompts state
   const [enhancedPrompts, setEnhancedPrompts] = useState<EnhancedPrompt[]>([]);
   const [isEnhancing, setIsEnhancing] = useState(false);
   
   // Formula-based workflow state
-  const [expandDepth, setExpandDepth] = useState<ExploreDepth>(1);
+  const [detailLevel, setDetailLevel] = useState<ExpandDetailLevel>('typical');
   const [clarificationPending, setClarificationPending] = useState<{
     originalInput: string;
     message: string;
     options: ScaleClarificationOption[];
   } | null>(null);
-  
-  // Auto-scroll to bottom on new messages
+
+  // Scroll to first new message when AI/system messages appear
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    const prevCount = prevMessageCountRef.current;
+    const currentCount = messages.length;
+    
+    if (currentCount > prevCount && prevCount > 0) {
+      // New messages appeared - check if it's not just a user message
+      const firstNewMessage = messages[prevCount];
+      if (firstNewMessage && firstNewMessage.role !== 'user') {
+        const element = messageRefs.current.get(firstNewMessage.id);
+        if (element) {
+          // Scroll the element into view at the top with some padding
+          element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      }
+    } else if (currentCount > 0 && prevCount === 0) {
+      // First message(s) appeared - scroll to top
+      if (scrollRef.current) {
+        scrollRef.current.scrollTop = 0;
+      }
     }
+    
+    prevMessageCountRef.current = currentCount;
   }, [messages]);
   
-  // Focus input when not in brief mode
+  // Focus input on mount
   useEffect(() => {
-    if (inputRef.current && !briefMode) {
-      inputRef.current.focus();
-    }
-  }, [briefMode]);
+    inputRef.current?.focus();
+  }, []);
   
   const handleSend = async () => {
     if (!inputValue.trim() || isLoading) return;
@@ -122,128 +131,97 @@ export function ChatPanel() {
     setLoading(true);
     
     try {
-      // FIRST: Try deterministic operation (for scale/adjust - faster, exact math)
-      const deterministicResult = tryDeterministicOperation(
-        content,
-        selectedNodes,
-        selectedGroups,
-        nodes
-      );
-      
-      if (deterministicResult.handled && deterministicResult.response) {
-        console.log('Handled deterministically:', deterministicResult.intent?.type);
-        
-        const proposals = deterministicResult.response.proposals
-          ? addIdsToProposals(deterministicResult.response.proposals)
-          : undefined;
-        
-        addAIMessage(deterministicResult.response.message, proposals);
-        setLoading(false);
-        return;
-      }
-      
-      // EXPAND/UNFOLD: When user wants to break down selected areas
-      const isExpandRequest = content.toLowerCase().match(
-        /\b(expand|unfold|break\s*down|detail|sub-?divide|elaborate)\b/i
-      );
-      
-      if (chatMode === 'agent' && isExpandRequest && selectedNodes.length > 0) {
-        console.log('Using formula-based expand for selected areas');
-        
-        // Expand each selected node
-        const allProposals: Proposal[] = [];
-        let responseMessage = '';
-        
-        for (const node of selectedNodes) {
-          const expandResponse = await expandArea(node, expandDepth, content);
-          
-          if (expandResponse.warnings?.includes('area_too_small')) {
-            responseMessage += expandResponse.message + '\n';
-            continue;
-          }
-          
-          const proposals = formulaResponseToProposals(expandResponse, node);
-          allProposals.push(...proposals);
-          responseMessage += expandResponse.message + '\n';
-        }
-        
-        addAIMessage(
-          responseMessage.trim() || `Expanded ${selectedNodes.length} area(s)`,
-          allProposals.length > 0 ? allProposals : undefined
-        );
-        setLoading(false);
-        return;
-      }
-      
-      // FORMULA-BASED APPROACH: Use for program generation
-      // Check if this looks like a brief/program request
-      const isProgramRequest = content.toLowerCase().match(
-        /\b(create|generate|make|design|plan|breakdown|program|layout|split|hotel|office|apartment|building|residential|commercial)\b/i
-      );
-      
-      if (chatMode === 'agent' && isProgramRequest) {
-        // Extract total area from brief text (e.g., "8000 sqm", "10,000 m²", "5000m2")
-        const areaMatch = content.match(/(\d[\d,]*(?:\.\d+)?)\s*(?:sqm|m²|m2|square\s*met(?:er|re)s?)\b/i);
-        const extractedArea = areaMatch ? parseFloat(areaMatch[1].replace(/,/g, '')) : undefined;
-        
-        console.log(`Using formula-based generation with depth ${expandDepth}, extracted area: ${extractedArea}`);
-        
-        const formulaResponse = await generateFormulaProgram(content, extractedArea, expandDepth);
-        
-        // Handle clarification needed
-        if (formulaResponse.clarification_needed && formulaResponse.options) {
-          setClarificationPending({
-            originalInput: content,
-            message: formulaResponse.message,
-            options: formulaResponse.options as ScaleClarificationOption[],
-          });
-          addAIMessage(formulaResponse.message);
-          setLoading(false);
-          return;
-        }
-        
-        // Convert to proposals
-        const proposals = formulaResponseToProposals(formulaResponse);
-        addAIMessage(formulaResponse.message, proposals.length > 0 ? proposals : undefined);
-        setLoading(false);
-        return;
-      }
-      
-      // FALLBACK: Use standard LLM for other operations
-      console.log('Using standard LLM');
-      
-      // Build request with chat mode configuration
-      const request = buildChatRequest(
-        content,
-        projectContext,
-        selectedNodes,
-        selectedGroups,
+      // Build action context
+      const actionContext: ActionContext = {
         nodes,
         groups,
-        { mode: chatMode, role: aiRole ?? undefined }
-      );
+        detailLevel,
+        prompt: content,
+        projectContext: projectContext || undefined,
+      };
       
-      // Send to AI with mode and context for intent processing
-      const allNodes = Object.values(nodes);
-      const allGroups = Object.values(groups);
-      const response = await sendChatMessage(
-        request, 
-        chatMode,
-        chatMode === 'agent' ? { nodes: allNodes, groups: allGroups } : undefined
-      );
-      
-      console.log('Chat response:', response);
-      
-      // Add proposals with IDs (only in agent mode)
-      const proposals = response.proposals
-        ? addIdsToProposals(response.proposals)
-        : undefined;
-      
-      console.log('Proposals with IDs:', JSON.stringify(proposals, null, 2));
-      
-      addAIMessage(response.message, proposals);
-      console.log('AI message added with proposals');
-      
+      // AGENT MODE: Always use full agent
+      {
+        // Check if content looks like a brief (tabular data with areas)
+        // Briefs use action registry for better parsing
+        const inputAnalysis = analyzeInput(content);
+        const looksLikeBrief = inputAnalysis.type === 'structured' || 
+          inputAnalysis.type === 'dirty' ||
+          (content.length > 500 && /\d+\s*[×x]\s*\d+|\d+\s*(?:sqm|m²|m2)/i.test(content));
+        
+        if (looksLikeBrief) {
+          // Use action registry for briefs
+          console.log('[Agent] Detected brief-like content, using action registry for parsing');
+          
+          const selectedNodes = selectedNodeIds.map((id) => nodes[id]).filter(Boolean);
+          const match = actionRegistry.classify(content, selectedNodes, actionContext);
+          
+          if (match) {
+            const { action } = match;
+            const validation = action.validate(content, selectedNodes, actionContext);
+            if (!validation.valid) {
+              addAIMessage(validation.error || 'Cannot perform this action.');
+              setLoading(false);
+              return;
+            }
+            
+            const result = await action.execute(content, selectedNodes, actionContext);
+            const proposals = action.toProposals(result, selectedNodes, actionContext);
+            const proposalsWithIds = proposals.length > 0 
+              ? addIdsToProposals(proposals) 
+              : undefined;
+            
+            addAIMessage(result.message, proposalsWithIds);
+            setLoading(false);
+            return;
+          }
+        }
+        
+        // FULL AGENT MODE: OpenAI tool-calling
+        console.log('[FullAgent] Using OpenAI tool-calling agent');
+          
+          const agentContext: AgentContext = {
+            nodes,
+            groups,
+            selectedNodeIds,
+            selectedGroupIds,
+            detailLevel,
+            projectContext: projectContext || undefined,
+          };
+          
+          try {
+            const agentResult = await runAgent(content, agentContext);
+            
+            console.log(`[FullAgent] Completed in ${agentResult.iterations} iterations`);
+            console.log(`[FullAgent] Tool calls:`, agentResult.toolCalls);
+            
+            // Build message with tool call summary
+            let message = agentResult.message;
+            if (agentResult.toolCalls.length > 0) {
+              const toolSummary = agentResult.toolCalls
+                .map(tc => `• ${tc.tool}: ${tc.result}`)
+                .join('\n');
+              message = `${agentResult.message}\n\n**Actions taken:**\n${toolSummary}`;
+            }
+            
+            // Add proposals if any
+            const proposalsWithIds = agentResult.proposals.length > 0 
+              ? addIdsToProposals(agentResult.proposals) 
+              : undefined;
+            
+            addAIMessage(message, proposalsWithIds);
+            setLoading(false);
+            return;
+          } catch (error) {
+            console.error('[FullAgent] Error:', error);
+            addSystemMessage(
+              `Agent error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+              'error'
+            );
+            setLoading(false);
+            return;
+          }
+      }
     } catch (error) {
       console.error('Chat error:', error);
       addSystemMessage('Failed to get response. Please try again.', 'error');
@@ -320,45 +298,60 @@ export function ChatPanel() {
   };
   
   const handleSelectEnhanced = async (option: EnhancedPrompt) => {
-    // Clear enhanced options
+    // Clear enhanced options and set the selected prompt
     setEnhancedPrompts([]);
-    
-    // Update input with selected prompt and send
     setInputValue(option.prompt);
+    
+    // Trigger send with the enhanced prompt
+    // Note: We need to use the prompt directly since setInputValue is async
+    const content = option.prompt;
     
     // Get selected items
     const selectedNodes = selectedNodeIds.map((id) => nodes[id]).filter(Boolean);
-    const selectedGroups = selectedGroupIds.map((id) => groups[id]).filter(Boolean);
     
     // Add user message
-    addUserMessage(option.prompt, selectedNodeIds, selectedGroupIds);
+    addUserMessage(content, selectedNodeIds, selectedGroupIds);
     setLoading(true);
     
     try {
-      const request = buildChatRequest(
-        option.prompt,
-        projectContext,
-        selectedNodes,
-        selectedGroups,
+      // Build action context
+      const actionContext: ActionContext = {
         nodes,
         groups,
-        { mode: chatMode, role: aiRole ?? undefined }
-      );
+        detailLevel,
+        prompt: content,
+        projectContext: projectContext || undefined,
+      };
       
-      // Pass context for intent processing in agent mode
-      const allNodes = Object.values(nodes);
-      const allGroups = Object.values(groups);
-      const response = await sendChatMessage(
-        request, 
-        chatMode,
-        chatMode === 'agent' ? { nodes: allNodes, groups: allGroups } : undefined
-      );
+      // Always use the full agent
+      console.log('[FullAgent] Using OpenAI tool-calling agent for enhanced prompt');
       
-      const proposals = response.proposals
-        ? addIdsToProposals(response.proposals)
+      const agentContext: AgentContext = {
+        nodes,
+        groups,
+        selectedNodeIds,
+        selectedGroupIds,
+        detailLevel,
+        projectContext: projectContext || undefined,
+      };
+      
+      const agentResult = await runAgent(content, agentContext);
+      
+      // Build message with tool call summary
+      let message = agentResult.message;
+      if (agentResult.toolCalls.length > 0) {
+        const toolSummary = agentResult.toolCalls
+          .map(tc => `• ${tc.tool}: ${tc.result}`)
+          .join('\n');
+        message = `${agentResult.message}\n\n**Actions taken:**\n${toolSummary}`;
+      }
+      
+      // Add proposals if any
+      const proposalsWithIds = agentResult.proposals.length > 0 
+        ? addIdsToProposals(agentResult.proposals) 
         : undefined;
       
-      addAIMessage(response.message, proposals);
+      addAIMessage(message, proposalsWithIds);
     } catch (error) {
       console.error('Chat error:', error);
       addSystemMessage('Failed to get response. Please try again.', 'error');
@@ -386,221 +379,201 @@ export function ChatPanel() {
           )}
         </div>
         <div className="flex items-center gap-1">
-          {/* Chat Mode Toggle */}
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setChatMode(chatMode === 'agent' ? 'consultation' : 'agent')}
-            className={chatMode === 'consultation' ? 'bg-muted' : ''}
-            title={chatMode === 'agent' ? 'Agent Mode (actions)' : 'Consultation Mode (Q&A)'}
-          >
-            {chatMode === 'agent' ? <Bot className="w-4 h-4" /> : <HelpCircle className="w-4 h-4" />}
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setBriefMode(!briefMode)}
-            className={briefMode ? 'bg-muted' : ''}
-            title={briefMode ? 'Switch to Chat' : 'Parse Brief'}
-          >
-            {briefMode ? <MessageSquare className="w-4 h-4" /> : <FileText className="w-4 h-4" />}
-          </Button>
           <Button variant="ghost" size="icon" onClick={clearChat} title="Clear chat">
             <Trash2 className="w-4 h-4" />
           </Button>
         </div>
       </div>
       
-      {/* Mode indicator */}
-      {!briefMode && (
-        <div className="px-3 py-2 bg-muted/30 text-xs border-b border-border space-y-1.5">
-          {/* Row 1: Mode and Context */}
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-1.5">
-              <span className="text-muted-foreground">Mode:</span>
-              <Badge variant={chatMode === 'agent' ? 'default' : 'secondary'} className="text-[10px] h-5">
-                {chatMode === 'agent' ? 'Agent' : 'Q&A'}
-              </Badge>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="text-muted-foreground">Context:</span>
-              {(selectedNodeIds.length > 0 || selectedGroupIds.length > 0) ? (
-                <div className="flex items-center gap-1">
-                  {selectedNodeIds.length > 0 && (
-                    <Badge variant="outline" className="text-[10px] h-5">
-                      {selectedNodeIds.length} area{selectedNodeIds.length > 1 ? 's' : ''}
-                    </Badge>
-                  )}
-                  {selectedGroupIds.length > 0 && (
-                    <Badge variant="outline" className="text-[10px] h-5">
-                      {selectedGroupIds.length} group{selectedGroupIds.length > 1 ? 's' : ''}
-                    </Badge>
-                  )}
-                </div>
-              ) : (
-                <Badge variant="secondary" className="text-[10px] h-5">
-                  All {Object.keys(nodes).length}
-                </Badge>
-              )}
-            </div>
-          </div>
-          {/* Row 2: Expand Depth (for tree exploration) */}
-          <ExpandDepthSelector depth={expandDepth} onDepthChange={setExpandDepth} />
-        </div>
-      )}
-      
-      {briefMode ? (
-        <BriefInput />
-      ) : (
-        <>
-          {/* Messages */}
-          <ScrollArea className="flex-1 min-h-0" ref={scrollRef}>
-            <div className="px-4 py-4">
-              {/* Show clarification card if pending */}
-              {clarificationPending && (
-                <div className="mb-4">
-                  <ClarificationCard
-                    message={clarificationPending.message}
-                    options={clarificationPending.options}
-                    onSelect={handleClarificationSelect}
-                    onDismiss={handleClarificationDismiss}
-                  />
-                </div>
-              )}
-              
-              {messages.length === 0 && !clarificationPending ? (
-                <div className="h-full flex flex-col items-center justify-center text-center text-muted-foreground">
-                  <Sparkles className="w-12 h-12 mb-4 opacity-20" />
-                  <p className="text-sm font-medium">AI Assistant</p>
-                  <p className="text-xs mt-1">
-                    Describe your project and total area.<br />
-                    AI will generate a formula-based breakdown.
-                  </p>
-                  <div className="my-4 w-32 h-px bg-border" />
-                  <p className="text-xs">
-                    Click any area to <strong>expand</strong> it further,<br />
-                    or switch to <strong>Brief Mode</strong>
-                  </p>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {messages.map((msg) => (
-                    <MessageBubble key={msg.id} message={msg} />
-                  ))}
-                  {isLoading && (
-                    <div className="flex items-center gap-2 text-muted-foreground">
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      <span className="text-sm">Thinking...</span>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </ScrollArea>
-          
-          {/* Input */}
-          <div className="p-4 border-t border-border flex-shrink-0">
-            {/* Enhanced Prompts Options */}
-            {enhancedPrompts.length > 0 && (
-              <div className="mb-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-muted-foreground flex items-center gap-1">
-                    <Wand2 className="w-3 h-3" />
-                    Choose an option:
-                  </span>
-                  <Button variant="ghost" size="icon" className="h-6 w-6" onClick={handleCancelEnhance}>
-                    <X className="w-3 h-3" />
-                  </Button>
-                </div>
-                {enhancedPrompts.map((option, i) => (
-                  <Card 
-                    key={i} 
-                    className="cursor-pointer hover:bg-muted/50 transition-colors"
-                    onClick={() => handleSelectEnhanced(option)}
-                  >
-                    <CardContent className="p-3">
-                      <div className="flex items-start gap-2">
-                        <Play className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <p className="font-medium text-sm">{option.title}</p>
-                          {/* Action summary with highlighted verbs */}
-                          <p className="text-xs text-foreground/80 mt-1.5 leading-relaxed">
-                            {option.actionSummary ? renderActionSummary(option.actionSummary) : option.prompt}
-                          </p>
-                          {/* Operations as small badges */}
-                          <div className="flex flex-wrap gap-1 mt-2">
-                            {option.operations.slice(0, 4).map((op, j) => (
-                              <Badge key={j} variant="outline" className="text-[10px] font-normal py-0">
-                                {op}
-                              </Badge>
-                            ))}
-                            {option.operations.length > 4 && (
-                              <Badge variant="outline" className="text-[10px] font-normal py-0 text-muted-foreground">
-                                +{option.operations.length - 4} more
-                              </Badge>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
+      {/* Context indicator */}
+      <div className="px-3 py-2 bg-muted/30 text-xs border-b border-border space-y-1.5">
+        {/* Row 1: Context */}
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-1.5">
+            <span className="text-muted-foreground">Context:</span>
+            {(selectedNodeIds.length > 0 || selectedGroupIds.length > 0) ? (
+              <div className="flex items-center gap-1">
+                {selectedNodeIds.length > 0 && (
+                  <Badge variant="outline" className="text-[10px] h-5">
+                    {selectedNodeIds.length} area{selectedNodeIds.length > 1 ? 's' : ''}
+                  </Badge>
+                )}
+                {selectedGroupIds.length > 0 && (
+                  <Badge variant="outline" className="text-[10px] h-5">
+                    {selectedGroupIds.length} group{selectedGroupIds.length > 1 ? 's' : ''}
+                  </Badge>
+                )}
               </div>
+            ) : (
+              <Badge variant="secondary" className="text-[10px] h-5">
+                All {Object.keys(nodes).length}
+              </Badge>
             )}
-            
-            <div className="flex gap-2">
-              <Textarea
-                ref={inputRef}
-                value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="Ask about areas, request changes..."
-                className="min-h-[80px] max-h-[120px] resize-none"
-                disabled={isLoading || isEnhancing}
+          </div>
+        </div>
+        {/* Row 2: Level of Detail (for Create and Unfold operations) */}
+        <DetailLevelSelector level={detailLevel} onLevelChange={setDetailLevel} />
+      </div>
+      
+      {/* Messages */}
+      <ScrollArea className="flex-1 min-h-0" ref={scrollRef}>
+        <div className="px-4 py-4">
+          {/* Show clarification card if pending */}
+          {clarificationPending && (
+            <div className="mb-4">
+              <ClarificationCard
+                message={clarificationPending.message}
+                options={clarificationPending.options}
+                onSelect={handleClarificationSelect}
+                onDismiss={handleClarificationDismiss}
               />
             </div>
-            <div className="flex justify-between items-center mt-2">
-              <p className="text-xs text-muted-foreground">
-                Shift+Enter for new line
+          )}
+          
+          {messages.length === 0 && !clarificationPending ? (
+            <div className="h-full flex flex-col items-center justify-center text-center text-muted-foreground py-8">
+              <Sparkles className="w-12 h-12 mb-4 opacity-20" />
+              <p className="text-sm font-medium mb-2">AI Assistant</p>
+              <p className="text-xs leading-relaxed max-w-[240px]">
+                <strong>Create</strong> a program, <strong>parse</strong> a brief,<br />
+                <strong>unfold</strong> areas, or <strong>scale</strong> values.
               </p>
-              <div className="flex gap-2">
-                {/* Enhance Button */}
-                <Button 
-                  onClick={handleEnhance} 
-                  disabled={!inputValue.trim() || isLoading || isEnhancing}
-                  size="sm"
-                  variant="outline"
-                  title="Suggest refined prompts"
-                >
-                  {isEnhancing ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <>
-                      <Wand2 className="w-4 h-4 mr-1" />
-                      Enhance
-                    </>
-                  )}
-                </Button>
-                {/* Send Button */}
-                <Button 
-                  onClick={handleSend} 
-                  disabled={!inputValue.trim() || isLoading || isEnhancing}
-                  size="sm"
-                >
-                  {isLoading ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <>
-                      <Send className="w-4 h-4 mr-1" />
-                      Send
-                    </>
-                  )}
-                </Button>
-              </div>
+              <div className="my-4 w-32 h-px bg-border" />
+              <p className="text-[11px] text-muted-foreground/70">
+                Examples:<br />
+                "Create hotel 5000 sqm"<br />
+                "Parse: Guest rooms 200x35m²..."<br />
+                Select area → "unfold"
+              </p>
             </div>
+          ) : (
+            <div className="space-y-4">
+              {messages.map((msg) => (
+                <div
+                  key={msg.id}
+                  ref={(el) => {
+                    if (el) {
+                      messageRefs.current.set(msg.id, el);
+                    } else {
+                      messageRefs.current.delete(msg.id);
+                    }
+                  }}
+                >
+                  <MessageBubble message={msg} />
+                </div>
+              ))}
+              {isLoading && (
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span className="text-sm">Thinking...</span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </ScrollArea>
+      
+      {/* Input */}
+      <div className="p-4 border-t border-border flex-shrink-0">
+        {/* Enhanced Prompts Options */}
+        {enhancedPrompts.length > 0 && (
+          <div className="mb-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                <Wand2 className="w-3 h-3" />
+                Choose an option:
+              </span>
+              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={handleCancelEnhance}>
+                <X className="w-3 h-3" />
+              </Button>
+            </div>
+            {enhancedPrompts.map((option, i) => (
+              <Card 
+                key={i} 
+                className="cursor-pointer hover:bg-muted/50 transition-colors"
+                onClick={() => handleSelectEnhanced(option)}
+              >
+                <CardContent className="p-3">
+                  <div className="flex items-start gap-2">
+                    <Play className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-sm">{option.title}</p>
+                      {/* Action summary with highlighted verbs */}
+                      <p className="text-xs text-foreground/80 mt-1.5 leading-relaxed">
+                        {option.actionSummary ? renderActionSummary(option.actionSummary) : option.prompt}
+                      </p>
+                      {/* Operations as small badges */}
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        {option.operations.slice(0, 4).map((op, j) => (
+                          <Badge key={j} variant="outline" className="text-[10px] font-normal py-0">
+                            {op}
+                          </Badge>
+                        ))}
+                        {option.operations.length > 4 && (
+                          <Badge variant="outline" className="text-[10px] font-normal py-0 text-muted-foreground">
+                            +{option.operations.length - 4} more
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
           </div>
-        </>
-      )}
+        )}
+        
+        <div className="flex gap-2">
+          <Textarea
+            ref={inputRef}
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Create hotel 5000m², parse brief, unfold area, +10%..."
+            className="min-h-[80px] max-h-[120px] resize-none"
+            disabled={isLoading || isEnhancing}
+          />
+        </div>
+        <div className="flex justify-between items-center mt-2">
+          <p className="text-xs text-muted-foreground">
+            Shift+Enter for new line
+          </p>
+          <div className="flex gap-2">
+            {/* Enhance Button */}
+            <Button 
+              onClick={handleEnhance} 
+              disabled={!inputValue.trim() || isLoading || isEnhancing}
+              size="sm"
+              variant="outline"
+              title="Suggest refined prompts"
+            >
+              {isEnhancing ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <>
+                  <Wand2 className="w-4 h-4 mr-1" />
+                  Enhance
+                </>
+              )}
+            </Button>
+            {/* Send Button */}
+            <Button 
+              onClick={handleSend} 
+              disabled={!inputValue.trim() || isLoading || isEnhancing}
+              size="sm"
+            >
+              {isLoading ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <>
+                  <Send className="w-4 h-4 mr-1" />
+                  Send
+                </>
+              )}
+            </Button>
+          </div>
+        </div>
+      </div>
     </aside>
   );
 }

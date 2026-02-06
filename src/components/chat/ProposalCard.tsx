@@ -25,6 +25,7 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
   const splitGroupByProportion = useProjectStore((s) => s.splitGroupByProportion);
   const mergeGroupAreas = useProjectStore((s) => s.mergeGroupAreas);
   const splitNodeByQuantity = useProjectStore((s) => s.splitNodeByQuantity);
+  const deleteGroup = useProjectStore((s) => s.deleteGroup);
   const nodes = useProjectStore((s) => s.nodes);
   const groups = useProjectStore((s) => s.groups);
   
@@ -97,6 +98,17 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
           : `AI: Split ${accepted.sourceName}`;
         snapshot('ai-split', label, { nodes, groups });
         
+        // Find the source node's group BEFORE deleting it
+        let sourceGroupId: string | null = null;
+        let sourceGroupColor: string | null = null;
+        for (const [groupId, group] of Object.entries(groups)) {
+          if (group.members.includes(accepted.sourceNodeId)) {
+            sourceGroupId = groupId;
+            sourceGroupColor = group.color;
+            break;
+          }
+        }
+        
         // Delete source and create splits, collecting new IDs
         deleteNode(accepted.sourceNodeId);
         const newNodeIds: string[] = [];
@@ -114,12 +126,17 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
           newNodeIds.push(newId);
         });
         
-        // If groupName provided, create group and assign splits to it
-        if (accepted.groupName) {
-          console.log('Creating group:', accepted.groupName, 'with nodes:', newNodeIds);
+        // If source was in a group, add new nodes to that same group (inherit color)
+        if (sourceGroupId) {
+          console.log('Assigning splits to existing group:', sourceGroupId);
+          assignToGroup(sourceGroupId, newNodeIds);
+        }
+        // Otherwise, if groupName provided, create new group
+        else if (accepted.groupName) {
+          console.log('Creating new group:', accepted.groupName, 'with nodes:', newNodeIds);
           const groupId = createGroup({ 
             name: accepted.groupName, 
-            color: accepted.groupColor || '#3b82f6' 
+            color: accepted.groupColor || sourceGroupColor || '#3b82f6' 
           });
           assignToGroup(groupId, newNodeIds);
         }
@@ -203,7 +220,20 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
         snapshot('ai-merge-group', `AI: Merge areas in ${accepted.groupName}`, { nodes, groups });
         mergeGroupAreas(accepted.groupId, accepted.newAreaName);
         break;
+        
+      default:
+        console.warn(`Unknown proposal type: ${accepted.type} - skipping`);
+        break;
     }
+    
+    // Cleanup: delete any groups that became empty after operations
+    const freshGroups = useProjectStore.getState().groups;
+    Object.entries(freshGroups).forEach(([groupId, group]) => {
+      if (group.members.length === 0) {
+        console.log('Cleaning up empty group:', groupId, group.name);
+        deleteGroup(groupId);
+      }
+    });
   };
   
   const handleReject = () => {
@@ -294,7 +324,7 @@ function ProposalTitle({ proposal }: { proposal: Proposal }) {
     case 'merge_group_areas':
       return <span>Merge all areas in "{proposal.groupName || 'group'}"</span>;
     default:
-      return <span>Proposal</span>;
+      return <span>⚠️ Unsupported operation</span>;
   }
 }
 
@@ -448,7 +478,7 @@ function ProposalDetails({ proposal }: { proposal: Proposal }) {
     default:
       return (
         <p className="text-xs text-muted-foreground">
-          Unknown proposal type
+          ⚠️ This feature is not yet supported. Try a different approach.
         </p>
       );
   }

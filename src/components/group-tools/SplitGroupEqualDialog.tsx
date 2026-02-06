@@ -51,17 +51,35 @@ export function SplitGroupEqualDialog({ open, onOpenChange, group }: SplitGroupE
     if (isNaN(numParts) || numParts < 2) return [];
 
     return memberNodes.map(node => {
-      const baseCount = Math.floor(node.count / numParts);
-      const remainder = node.count % numParts;
-      return {
-        name: node.name,
-        originalCount: node.count,
-        areaPerUnit: node.areaPerUnit,
-        // First 'remainder' groups get baseCount+1, rest get baseCount
-        splitCounts: Array.from({ length: numParts }, (_, i) => 
-          baseCount + (i < remainder ? 1 : 0)
-        ),
-      };
+      // Match store logic: if count >= parts, split by count; otherwise split by area
+      const splitByCount = node.count >= numParts;
+      
+      if (splitByCount) {
+        const baseCount = Math.floor(node.count / numParts);
+        const remainder = node.count % numParts;
+        return {
+          name: node.name,
+          originalCount: node.count,
+          areaPerUnit: node.areaPerUnit,
+          splitByCount: true,
+          // First 'remainder' groups get baseCount+1, rest get baseCount
+          splitCounts: Array.from({ length: numParts }, (_, i) => 
+            baseCount + (i < remainder ? 1 : 0)
+          ),
+          splitAreaPerUnit: node.areaPerUnit, // unchanged
+        };
+      } else {
+        // Split by area - each group gets count=1 with divided areaPerUnit
+        const dividedArea = node.areaPerUnit / numParts;
+        return {
+          name: node.name,
+          originalCount: node.count,
+          areaPerUnit: node.areaPerUnit,
+          splitByCount: false,
+          splitCounts: Array.from({ length: numParts }, () => 1),
+          splitAreaPerUnit: dividedArea,
+        };
+      }
     });
   }, [numParts, memberNodes]);
 
@@ -70,14 +88,15 @@ export function SplitGroupEqualDialog({ open, onOpenChange, group }: SplitGroupE
     [totalArea, numParts]
   );
 
-  // Valid if numParts >= 2 and every area has at least 1 unit per group (or some groups get 0)
-  const isValid = numParts >= 2 && nameSuffix.trim().length > 0 && totalUnits >= numParts;
+  // Valid if numParts >= 2 and nameSuffix provided
+  // (We can always split: either by count if count >= parts, or by area if count < parts)
+  const isValid = numParts >= 2 && nameSuffix.trim().length > 0;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!isValid) {
-      toast.error(`Need at least ${numParts} total units to split into ${numParts} groups`);
+      toast.error('Please provide a valid number of groups and name suffix');
       return;
     }
 
@@ -147,7 +166,7 @@ export function SplitGroupEqualDialog({ open, onOpenChange, group }: SplitGroupE
             {previewAreas.length > 0 && numParts >= 2 && (
               <div className="space-y-2">
                 <div className="flex justify-between items-center">
-                  <Label className="text-xs text-muted-foreground">Preview: How counts will be split</Label>
+                  <Label className="text-xs text-muted-foreground">Preview: How areas will be split</Label>
                   <span className="text-xs text-muted-foreground">~{areaPerGroup.toLocaleString()} m²/group</span>
                 </div>
                 <div className="max-h-48 overflow-y-auto border rounded-md">
@@ -165,9 +184,19 @@ export function SplitGroupEqualDialog({ open, onOpenChange, group }: SplitGroupE
                           <td className="p-2 truncate max-w-[150px]" title={area.name}>{area.name}</td>
                           <td className="p-2 text-right tabular-nums">{area.originalCount}×{area.areaPerUnit}m²</td>
                           <td className="p-2 text-right tabular-nums text-primary">
-                            {area.splitCounts[0]}× each
-                            {area.splitCounts[0] !== area.splitCounts[numParts - 1] && (
-                              <span className="text-muted-foreground"> (some {area.splitCounts[numParts - 1]}×)</span>
+                            {area.splitByCount ? (
+                              // Split by count - showing count distribution
+                              <>
+                                {area.splitCounts[0]}× each
+                                {area.splitCounts[0] !== area.splitCounts[numParts - 1] && (
+                                  <span className="text-muted-foreground"> (some {area.splitCounts[numParts - 1]}×)</span>
+                                )}
+                              </>
+                            ) : (
+                              // Split by area - showing divided area
+                              <span className="text-amber-600 dark:text-amber-400">
+                                1×{area.splitAreaPerUnit.toFixed(1)}m²
+                              </span>
                             )}
                           </td>
                         </tr>
@@ -175,16 +204,15 @@ export function SplitGroupEqualDialog({ open, onOpenChange, group }: SplitGroupE
                     </tbody>
                   </table>
                 </div>
+                {previewAreas.some(a => !a.splitByCount) && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400">
+                    ⚡ Areas with count &lt; {numParts} will have their m² divided instead
+                  </p>
+                )}
                 <p className="text-xs text-muted-foreground">
                   Result: {numParts} groups named "{group.name} - {nameSuffix} 1" through "{group.name} - {nameSuffix} {numParts}"
                 </p>
               </div>
-            )}
-
-            {totalUnits < numParts && numParts >= 2 && (
-              <p className="text-xs text-destructive">
-                ⚠️ Not enough units ({totalUnits}) to split into {numParts} groups
-              </p>
             )}
           </div>
 

@@ -100,6 +100,7 @@ export interface CreateAreasProposal {
     formulaType?: string;       // ratio, unit_based, remainder, etc.
     expandable?: boolean;       // Can this area be expanded further
   }>;
+  detectedGroups?: DetectedGroup[];  // Pre-defined groups from brief structure
   status: ProposalStatus;
 }
 
@@ -302,4 +303,5 @@ export interface ParsedBrief {
   suggestedAreas?: ParsedBriefArea[];
   ambiguities?: string[];
   skipCirculationAddition?: boolean;  // True if factor already accounts for circulation
+  isRedirectToAgent?: boolean;        // True when input is a generation prompt
 }

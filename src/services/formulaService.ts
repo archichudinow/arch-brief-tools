@@ -13,7 +13,7 @@ import type { UUID, AreaNode, Proposal, CreateAreasProposal, SplitAreaProposal }
 import type { AreaFormula, ProjectScale } from '@/types/formulas';
 import { MIN_AREA_THRESHOLDS } from '@/types/formulas';
 import { describeFormula } from './formulaEngine';
-import { analyzeScale, formatArea } from './scaleAnalyzer';
+import { analyzeScale, formatArea, getScaleUnfoldGuidance, detectScale } from './scaleAnalyzer';
 import { FORMULA_SYSTEM_PROMPT } from './aiPrompts';
 
 // ============================================
@@ -81,6 +81,37 @@ function getApiKey(): string {
 // ============================================
 
 /**
+ * Helper to extract percentage from formula (handles both 'ratio' and 'percentage' AI responses)
+ */
+function getFormulaPercentage(formula: AreaFormula): number {
+  if (formula.type !== 'ratio') return 0;
+  const formulaAny = formula as unknown as Record<string, unknown>;
+  
+  // Check for 'percentage' property first (AI might return 0-100)
+  if (typeof formulaAny.percentage === 'number') {
+    return formulaAny.percentage as number;
+  }
+  
+  // Check for 'ratio' property (should be 0-1)
+  if (typeof formula.ratio === 'number') {
+    return formula.ratio > 1 ? formula.ratio : formula.ratio * 100;
+  }
+  
+  return 0;
+}
+
+/**
+ * Helper to set percentage on a formula
+ */
+function setFormulaPercentage(formula: AreaFormula, percentage: number): void {
+  if (formula.type !== 'ratio') return;
+  const formulaAny = formula as unknown as Record<string, unknown>;
+  formulaAny.percentage = percentage;
+  // Also update ratio for compatibility
+  formula.ratio = percentage / 100;
+}
+
+/**
  * Generate initial program from brief with optional recursive unfold
  * 
  * @param briefText - The brief/prompt text
@@ -90,260 +121,117 @@ function getApiKey(): string {
 export async function generateFormulaProgram(
   briefText: string,
   totalArea?: number,
-  depth: number = 1
+  detailLevel: ExpandDetailLevel | number = 'typical'
 ): Promise<FormulaAIResponse> {
-  console.log(`[generateFormulaProgram] Starting with depth=${depth}, totalArea=${totalArea}`);
+  // Convert legacy numeric depth to detail level
+  const level: ExpandDetailLevel = typeof detailLevel === 'number' 
+    ? (detailLevel <= 1 ? 'abstract' : detailLevel >= 3 ? 'detailed' : 'typical')
+    : detailLevel;
+  
+  console.log(`[generateFormulaProgram] Starting with level=${level}, totalArea=${totalArea}`);
   
   const systemPrompt = buildSystemPrompt('create');
   
+  // Detail level specific guidance for generation
+  // CREATE always uses BLOBS (ratio formulas) - no counts
+  // Quantities/counts are only applied during UNFOLD
+  const levelGuidance = {
+    abstract: `Generate 4-6 ABSTRACT ZONES as area blobs.
+Use zone names like: "Guest Accommodation Wing", "Public & Lobby Zone", "F&B Zone", "Back-of-House".
+These zones will be expanded later into specific areas with quantities.`,
+    typical: `Generate 6-10 FUNCTIONAL AREA BLOBS with real names.
+Examples: "Guest Rooms", "Lobby", "Restaurant", "Kitchen", "Meeting Rooms", "Parking".
+Do NOT use counts or quantities yet - just area blobs that can be unfolded later.`,
+    detailed: `Generate 12-20 SPECIFIC AREA BLOBS - be comprehensive.
+Include all unique spaces mentioned (e.g., sky garage, pool, spa, restaurant, etc.)
+Do NOT use counts - generate each as a single area blob.
+These can be unfolded into rooms with quantities later.`
+  };
+  
   let userPrompt = briefText;
+  
   if (totalArea) {
     userPrompt = `*** HARD CONSTRAINT: Total area is EXACTLY ${formatArea(totalArea)} ***
 
-Your formulas MUST sum to exactly this total. If using unit_based formulas (e.g., rooms), 
-calculate the unit count to fit within the budget. Do NOT exceed this total.
-
-If you use 'remainder' type for one area, all other formulas must leave positive remainder.
+Your formulas MUST sum to exactly this total using ratio formulas (percentages).
+Do NOT use unit_based formulas - only use ratio with percentage.
 
 Brief: ${briefText}`;
   }
   
-  // Add depth instruction to prompt - ask for abstract zones when we'll unfold
-  if (depth > 1) {
-    userPrompt += `\n\n*** CRITICAL INSTRUCTION ***
-Generate ONLY HIGH-LEVEL ZONES (5-8 major functional zones), NOT individual rooms or detailed spaces.
-You MUST use abstract zone names that can be further subdivided.
+  // Add detail level instruction
+  userPrompt += `\n\n*** DETAIL LEVEL: ${level.toUpperCase()} ***
+${levelGuidance[level]}
 
-CORRECT zone names (use these patterns):
-- "Guest Accommodation Wing" (NOT "Standard Room", "Suite", "Bathroom")
-- "Food & Beverage Zone" (NOT "Restaurant", "Kitchen", "Bar")
-- "Back-of-House Facilities" (NOT "Laundry Room", "Storage", "Staff Locker")
-- "Outdoor Amenities Area" (NOT "Pool", "Tennis Court", "Garden")
-- "Parking & Vehicle Zone" (NOT "Parking Space", "Loading Dock")
-- "Public & Lobby Zone" (NOT "Reception Desk", "Waiting Area")
+CRITICAL RULES:
+1. NEVER include circulation, corridors, vertical circulation, MEP, or core areas
+2. ONLY use ratio formulas with percentages - NO unit_based formulas
+3. All percentages MUST sum to exactly 100%
+4. EVERY area MUST have a groupHint to organize related areas together
 
-Each zone MUST have "Zone", "Wing", "Area", "Facilities", or "Block" in its name.`;
-  }
+OUTPUT FORMAT (groupHint is REQUIRED):
+{ "name": "Area Name", "formula": { "type": "ratio", "percentage": 25, "reasoning": "..." }, "groupHint": "Category Name" }
+
+Example groupHints for a carwash: "Wash Operations", "Customer Services", "Staff & Admin", "Utilities"
+Example groupHints for a hotel: "Guest Rooms", "Public Areas", "F&B", "Back of House", "Administration"`;
   
-  const initialResponse = await callFormulaAI(systemPrompt, userPrompt);
+  const response = await callFormulaAI(systemPrompt, userPrompt);
   
-  // If depth is 1 or no areas generated, return as-is
-  if (depth <= 1 || !initialResponse.intent || initialResponse.intent.type !== 'create_formula_program') {
-    console.log(`[generateFormulaProgram] Returning initial response (depth=${depth}, hasIntent=${!!initialResponse.intent})`);
-    return initialResponse;
-  }
-  
-  // Recursive unfold for depth > 1
-  const targetTotal = initialResponse.intent.targetTotal;
-  const initialAreas = initialResponse.intent.areas;
-  
-  console.log(`[unfold] Starting recursive unfold: ${initialAreas.length} initial zones, depth=${depth}`);
-  console.log(`[unfold] Initial zones:`, initialAreas.map(a => a.name));
-  
-  const unfoldedAreas: FormulaAreaSpec[] = [];
-  // Track which zones were successfully expanded (for group creation)
-  const expandedZones: string[] = [];
-  
-  for (const area of initialAreas) {
-    const areaSize = evaluateSingleFormula(area.formula, targetTotal);
+  // Filter out circulation/corridor areas for create intent
+  // CREATE always uses blobs (ratio) - no counts conversion
+  if (response.intent?.type === 'create_formula_program' && response.intent.areas) {
+    const circulationPatterns = /\b(circulation|corridor|vertical\s*circulation|core|mep|lift\s*lobby|stair|elevator|shaft|duct|riser)\b/i;
     
-    // For depth > 1, unfold ALL zones that are > 100m² (they should all be large zones)
-    const shouldUnfold = areaSize > 100;
-    
-    if (!shouldUnfold) {
-      console.log(`[unfold] "${area.name}" (${areaSize}m²) → too small, keeping as terminal area`);
-      // Keep as standalone area (no group for small terminal areas)
-      unfoldedAreas.push(area);
-      continue;
-    }
-    
-    console.log(`[unfold] "${area.name}" (${areaSize}m²) → calling expandArea...`);
-    
-    // Create a mock node for expandArea
-    const mockNode: AreaNode = {
-      id: 'temp-' + area.name,
-      name: area.name,
-      areaPerUnit: areaSize,
-      count: 1,
-      notes: [],
-      lockedFields: [],
-      createdAt: new Date().toISOString(),
-      modifiedAt: new Date().toISOString(),
-      createdBy: 'ai',
-    };
-    
-    try {
-      // Unfold this area - pass remaining depth
-      const expandResponse = await expandArea(mockNode, depth - 1, briefText);
-      
-      const hasChildren = expandResponse.intent?.type === 'expand_area' && 
-                         expandResponse.intent.type === 'expand_area' &&
-                         expandResponse.intent.children && 
-                         expandResponse.intent.children.length > 0;
-      
-      console.log(`[unfold] expandArea response for "${area.name}":`, {
-        hasIntent: !!expandResponse.intent,
-        intentType: expandResponse.intent?.type,
-        childrenCount: hasChildren && expandResponse.intent?.type === 'expand_area' ? expandResponse.intent.children.length : 0,
-        warnings: expandResponse.warnings,
-      });
-      
-      if (hasChildren && expandResponse.intent?.type === 'expand_area') {
-        // SUCCESS: Add children with groupHint pointing to parent zone
-        const children = expandResponse.intent.children;
-        expandedZones.push(area.name);
-        
-        // STEP 1: Compute all child sizes and track which are scalable
-        const childData: Array<{ name: string; size: number; isScalable: boolean; formula: AreaFormula }> = [];
-        
-        for (const child of children) {
-          const childSize = evaluateSingleFormula(child.formula, areaSize);
-          const isScalable = child.formula.type === 'ratio' || child.formula.type === 'fallback';
-          childData.push({ 
-            name: child.name, 
-            size: childSize, 
-            isScalable,
-            formula: child.formula 
-          });
-        }
-        
-        // STEP 2: Normalize to ensure children sum to parent
-        const rawTotal = childData.reduce((sum, c) => sum + c.size, 0);
-        const tolerance = 0.02; // 2%
-        const deviation = Math.abs(rawTotal - areaSize) / areaSize;
-        
-        if (deviation > tolerance) {
-          const scalableTotal = childData.filter(c => c.isScalable).reduce((sum, c) => sum + c.size, 0);
-          const fixedTotal = rawTotal - scalableTotal;
-          
-          if (scalableTotal > 0) {
-            const targetScalable = areaSize - fixedTotal;
-            const scaleFactor = targetScalable / scalableTotal;
-            
-            console.log(`[unfold]   Normalizing children: raw=${rawTotal}, target=${areaSize}, scaling ratio areas by ${scaleFactor.toFixed(3)}`);
-            
-            for (const child of childData) {
-              if (child.isScalable) {
-                child.size = Math.round(child.size * scaleFactor);
-              }
-            }
-          }
-        }
-        
-        // STEP 3: Add normalized children
-        for (const child of childData) {
-          unfoldedAreas.push({
-            name: child.name,
-            // Convert to fixed formula with computed actual area
-            formula: {
-              type: 'fixed',
-              value: child.size,
-              reasoning: `${child.size}m² (computed from parent "${area.name}" ${areaSize}m²)`,
-            } as AreaFormula,
-            groupHint: area.name, // Parent zone becomes the group
-          });
-        }
-        
-        const normalizedTotal = childData.reduce((sum, c) => sum + c.size, 0);
-        console.log(`[unfold]   ✓ expanded into ${children.length} sub-areas (total: ${normalizedTotal}m²), groupHint="${area.name}"`);
-      } else {
-        // FAILED: Keep original zone as a single area (no groupHint = standalone)
-        console.log(`[unfold]   ✗ no children returned, keeping "${area.name}" as standalone area`);
-        unfoldedAreas.push({
-          ...area,
-          // No groupHint - will be a standalone area not in any group
-        });
+    // Filter out circulation areas
+    response.intent.areas = response.intent.areas.filter(area => {
+      if (circulationPatterns.test(area.name)) {
+        console.log(`[generateFormulaProgram] Filtered out circulation area: "${area.name}"`);
+        return false;
       }
-    } catch (err) {
-      console.error(`[unfold] Error expanding "${area.name}":`, err);
-      // On error, keep original as standalone
-      unfoldedAreas.push(area);
-    }
+      return true;
+    });
     
-    // Rate limit
-    await new Promise(resolve => setTimeout(resolve, 300));
-  }
-  
-  console.log(`[unfold] Complete: ${initialAreas.length} zones → ${unfoldedAreas.length} areas`);
-  
-  // Summary of groupHints
-  const groupSummary: Record<string, string[]> = {};
-  const ungrouped: string[] = [];
-  for (const area of unfoldedAreas) {
-    if (area.groupHint) {
-      if (!groupSummary[area.groupHint]) {
-        groupSummary[area.groupHint] = [];
+    // Clean embedded counts from names (e.g., "Queen Room ×60" → "Queen Room")
+    // but keep as blob - don't convert to unit_based
+    response.intent.areas.forEach(area => {
+      const countMatch = area.name.match(/^(.+?)\s*[×x]\s*\d+$/i);
+      if (countMatch) {
+        const cleanName = countMatch[1].trim();
+        console.log(`[generateFormulaProgram] Cleaned name: "${area.name}" → "${cleanName}" (keeping as blob)`);
+        area.name = cleanName;
+        // Keep ratio formula - don't convert to unit_based for Create
       }
-      groupSummary[area.groupHint].push(area.name);
-    } else {
-      ungrouped.push(area.name);
-    }
-  }
-  console.log(`[unfold] Group summary:`, groupSummary);
-  if (ungrouped.length > 0) {
-    console.log(`[unfold] Ungrouped areas:`, ungrouped);
+    });
   }
   
-  // Return modified response
-  return {
-    ...initialResponse,
-    message: `${initialResponse.message}\n\n📊 *Expanded ${initialAreas.length} zones into ${unfoldedAreas.length} detailed areas (depth ${depth}).*`,
-    intent: {
-      ...initialResponse.intent,
-      areas: unfoldedAreas,
-    },
-  };
+  console.log(`[generateFormulaProgram] Returning response with ${response.intent?.type === 'create_formula_program' ? response.intent.areas?.length || 0 : 0} areas`);
+  return response;
 }
 
 /**
- * Evaluate a single formula to get area size
- * Handles both 'ratio' (0-1) and 'percentage' (0-100) from AI
- */
-function evaluateSingleFormula(formula: AreaFormula, totalArea: number): number {
-  switch (formula.type) {
-    case 'fixed':
-      return formula.value || 0;
-    case 'ratio': {
-      // AI might return 'percentage' (0-100) instead of 'ratio' (0-1)
-      const formulaAny = formula as unknown as Record<string, unknown>;
-      let ratioValue = formula.ratio || 0;
-      
-      // Check if AI sent percentage instead of ratio
-      if (!ratioValue && typeof formulaAny.percentage === 'number') {
-        ratioValue = formulaAny.percentage / 100;
-      }
-      
-      // Detect if ratio looks like a percentage (> 1)
-      if (ratioValue > 1) {
-        ratioValue = ratioValue / 100;
-      }
-      
-      return Math.round(ratioValue * totalArea);
-    }
-    case 'unit_based':
-      return (formula.areaPerUnit || 0) * (formula.unitCount || 1) * (formula.multiplier || 1);
-    default:
-      return 100; // Fallback
-  }
-}
-
-/**
- * Expand a specific area into sub-areas
+ * Expand a specific area into sub-areas (single level, no recursion)
  * 
  * @param parentNode - Area to expand
- * @param depth - How many levels to expand (1-3)
+ * @param detailLevel - Level of detail: 'abstract' (3-5 zones), 'typical' (4-8 areas), 'detailed' (8-15 specific areas)
  * @param context - Additional context from user
  */
+export type ExpandDetailLevel = 'abstract' | 'typical' | 'detailed';
+
 export async function expandArea(
   parentNode: AreaNode,
-  depth: number = 1,
+  detailLevel: ExpandDetailLevel | number = 'typical',
   context?: string
 ): Promise<FormulaAIResponse> {
   const parentArea = parentNode.areaPerUnit * parentNode.count;
   
-  console.log(`[expandArea] Expanding "${parentNode.name}" (${parentArea}m²) with depth=${depth}`);
+  // Convert legacy numeric depth to detail level
+  const level: ExpandDetailLevel = typeof detailLevel === 'number' 
+    ? (detailLevel <= 1 ? 'abstract' : detailLevel >= 3 ? 'detailed' : 'typical')
+    : detailLevel;
   
-  // Check if area is too small to meaningfully split (need at least 10m² to split into 2 parts)
+  console.log(`[expandArea] Expanding "${parentNode.name}" (${parentArea}m²) with level=${level}`);
+  
+  // Check if area is too small to meaningfully split
   const minSplitArea = MIN_AREA_THRESHOLDS.SPLIT_DEFAULT * 2;
   if (parentArea < minSplitArea) {
     console.log(`[expandArea] Area too small (${parentArea} < ${minSplitArea})`);
@@ -353,44 +241,124 @@ export async function expandArea(
     };
   }
   
-  const systemPrompt = buildSystemPrompt('expand', depth);
+  const systemPrompt = buildExpandSystemPrompt(level);
   
-  let userPrompt = `Expand/breakdown "${parentNode.name}" (${formatArea(parentArea)}) into detailed sub-areas.
+  // Get scale-aware unfold guidance
+  const scaleGuidance = getScaleUnfoldGuidance(parentArea);
+  
+  // Detail level adjusts HOW MANY items, scale determines WHAT TYPE of items
+  const countGuidance = {
+    abstract: '3-5',
+    typical: '5-8',
+    detailed: '8-12'
+  };
+  
+  // At interior scale, use unit_based for repeatable rooms
+  // At larger scales, use ratio formulas (blobs)
+  const useUnitBased = scaleGuidance.currentScale === 'interior' && (level === 'typical' || level === 'detailed');
+  
+  let userPrompt = `Expand "${parentNode.name}" (${formatArea(parentArea)}) into sub-areas.
 
-Generate 4-8 specific rooms/spaces within this zone. Use the FULL parent area (${formatArea(parentArea)}).
+=== SCALE-AWARE UNFOLDING ===
+Current scale: ${scaleGuidance.currentScale.toUpperCase()} (${formatArea(parentArea)})
+Children should be: ${scaleGuidance.childrenType}
+Target child size: ${formatArea(scaleGuidance.childSizeRange.min)} - ${formatArea(scaleGuidance.childSizeRange.max)}
+${scaleGuidance.nextScale ? `Next unfold would produce: ${scaleGuidance.nextScale} scale items` : 'This is the finest grain level - produces atomic rooms/spaces'}
 
-Example output for "Guest Room Wing" (5,000 m²):
-{
-  "message": "Breaking down Guest Room Wing into specific room types...",
-  "intent": {
-    "type": "expand_area",
-    "parentName": "Guest Room Wing",
-    "parentArea": 5000,
-    "children": [
-      { "name": "Standard Rooms", "formula": { "type": "ratio", "percentage": 50 } },
-      { "name": "Suites", "formula": { "type": "ratio", "percentage": 25 } },
-      { "name": "Presidential Suite", "formula": { "type": "fixed", "value": 200 } },
-      { "name": "Room Corridors", "formula": { "type": "ratio", "percentage": 15 } },
-      { "name": "Housekeeping Stations", "formula": { "type": "ratio", "percentage": 5 } }
-    ]
-  }
-}`;
+=== CONSTRAINTS ===
+Generate ${countGuidance[level]} ${scaleGuidance.childrenType}.
+Examples at this scale: ${scaleGuidance.examples.join(', ')}
+
+CRITICAL: Do NOT jump to fine detail (individual rooms, apartments) from large-scale areas.
+- 157,000 m² → districts/zones (10,000-50,000 m² each), NOT 800 apartments
+- 50,000 m² → building plots/complexes (5,000-20,000 m² each)
+- 10,000 m² → buildings/outdoor zones (500-3,000 m² each)
+- 3,000 m² → floors/departments (100-500 m² each)
+- 500 m² → individual rooms (10-100 m² each)
+
+=== OUTPUT FORMAT ===
+${useUnitBased ? `For REPEATABLE SPACES at interior scale: Use unit_based formula
+{ "type": "unit_based", "areaPerUnit": 35, "unitCount": 10, "reasoning": "10 hotel rooms at 35m² each" }
+
+For UNIQUE SPACES: Use ratio formula` : `Use ratio formulas with percentages that sum to 100%
+{ "type": "ratio", "percentage": 25, "reasoning": "Main building plot" }`}
+
+NEVER include circulation, corridors, vertical core, MEP spaces, or lift lobbies.
+
+PARENT AREA: ${formatArea(parentArea)} (total budget)`;
   
   if (parentNode.userNote) {
     userPrompt += `\n\nNotes from brief: ${parentNode.userNote}`;
   }
   
   if (context) {
-    userPrompt += `\n\nProject context: ${context}`;
-  }
-  
-  // Scale analysis to guide AI
-  const scaleAnalysis = analyzeScale(parentArea);
-  if (scaleAnalysis.detectedScale) {
-    userPrompt += `\n\nDetected scale: ${scaleAnalysis.detectedScale}`;
+    userPrompt += `\n\nUser context: ${context}`;
   }
   
   const response = await callFormulaAI(systemPrompt, userPrompt);
+  
+  // Filter out circulation/corridor areas and parse embedded counts
+  if (response.intent?.type === 'expand_area' && response.intent.children) {
+    // Filter out circulation-type areas
+    const circulationPatterns = /\b(circulation|corridor|vertical\s*circulation|core|mep|lift\s*lobby|stair|elevator|shaft|duct|riser)\b/i;
+    response.intent.children = response.intent.children.filter(child => {
+      if (circulationPatterns.test(child.name)) {
+        console.log(`[expandArea] Filtered out circulation area: "${child.name}"`);
+        return false;
+      }
+      return true;
+    });
+    
+    // Parse embedded counts from names like "Queen Room ×60" or "Queen Room x60"
+    // Only convert to unit_based on typical/detailed levels
+    response.intent.children.forEach(child => {
+      const countMatch = child.name.match(/^(.+?)\s*[×x]\s*(\d+)$/i);
+      if (countMatch) {
+        const cleanName = countMatch[1].trim();
+        const embeddedCount = parseInt(countMatch[2], 10);
+        
+        console.log(`[expandArea] Parsed count from name: "${child.name}" → "${cleanName}" × ${embeddedCount}`);
+        
+        // Update name to clean version
+        child.name = cleanName;
+        
+        // Only convert to unit_based on typical/detailed levels
+        if (useUnitBased && child.formula.type === 'ratio') {
+          const percentage = getFormulaPercentage(child.formula);
+          const totalAreaForChild = (parentArea * percentage) / 100;
+          const areaPerUnit = Math.round(totalAreaForChild / embeddedCount);
+          
+          // Convert to unit_based formula
+          child.formula = {
+            type: 'unit_based',
+            areaPerUnit,
+            unitCount: embeddedCount,
+            reasoning: `${embeddedCount} ${cleanName} at ${areaPerUnit}m² each`,
+          } as AreaFormula;
+        }
+      }
+    });
+    
+    const children = response.intent.children;
+    
+    // Only normalize if we still have ratio-based areas
+    const ratioChildren = children.filter(c => c.formula.type === 'ratio');
+    if (ratioChildren.length > 0) {
+      const totalPercentage = ratioChildren.reduce((sum, c) => {
+        return sum + getFormulaPercentage(c.formula);
+      }, 0);
+      
+      // If percentages don't sum to 100 and we have ratio formulas, normalize them
+      if (totalPercentage > 0 && Math.abs(totalPercentage - 100) > 1) {
+        console.log(`[expandArea] Normalizing percentages: ${totalPercentage}% → 100%`);
+        const scaleFactor = 100 / totalPercentage;
+        ratioChildren.forEach(c => {
+          const currentPct = getFormulaPercentage(c.formula);
+          setFormulaPercentage(c.formula, Math.round(currentPct * scaleFactor * 10) / 10);
+        });
+      }
+    }
+  }
   
   console.log(`[expandArea] Response for "${parentNode.name}":`, JSON.stringify(response, null, 2));
   
@@ -432,7 +400,7 @@ CRITICAL RULES:
 1. Output MUST have "intent" with "type": "expand_area"
 2. "children" array MUST contain 4-8 specific areas
 3. Each child MUST have "name" and "formula"
-4. Formulas should be "ratio" (percentages) that sum to ~100%
+4. Formulas should be "ratio" (percentages) that sum to EXACTLY 100%
 5. Use real, specific room names (NOT zones)
 
 REQUIRED OUTPUT FORMAT:
@@ -451,6 +419,59 @@ REQUIRED OUTPUT FORMAT:
   }
 }`;
   }
+  
+  return prompt;
+}
+
+function buildExpandSystemPrompt(level: ExpandDetailLevel): string {
+  let prompt = FORMULA_SYSTEM_PROMPT;
+  
+  const itemCount = {
+    abstract: '4-6',
+    typical: '6-10',
+    detailed: '12-20'
+  };
+  
+  const useUnitBased = level === 'typical' || level === 'detailed';
+  
+  prompt += `\n\n=== EXPAND/UNFOLD MODE (${level.toUpperCase()}) ===
+You are breaking down an existing zone/area into sub-spaces.
+
+CRITICAL RULES:
+1. Output MUST have "intent" with "type": "expand_area"
+2. "children" array MUST contain ${itemCount[level]} areas
+3. Each child MUST have "name" and "formula"
+4. NEVER include circulation, corridors, vertical circulation, MEP, or core areas - we think at concept level only
+${useUnitBased ? `
+FORMULA TYPES TO USE (TYPICAL/DETAILED LEVELS):
+- For REPEATABLE ROOMS (hotel rooms, offices, apartments): Use "unit_based" formula
+  Example: { "type": "unit_based", "areaPerUnit": 35, "unitCount": 60, "reasoning": "60 queen rooms at 35m² each" }
+- For UNIQUE SPACES (lobby, restaurant, spa): Use "ratio" formula with percentage
+  Example: { "type": "ratio", "percentage": 15, "reasoning": "Main lobby and reception" }` : `
+FORMULA TYPE (ABSTRACT LEVEL):
+- Use ONLY "ratio" formulas with percentages that sum to EXACTLY 100%
+- Do NOT use unit_based formulas at this level
+  Example: { "type": "ratio", "percentage": 40, "reasoning": "Guest accommodation zone" }`}
+
+DETAIL LEVEL: ${level.toUpperCase()}
+${level === 'abstract' ? '- Generate broad functional ZONES as blobs - no counts' : ''}
+${level === 'typical' ? '- Generate functional AREA TYPES - USE unit_based FOR REPEATABLE ROOMS' : ''}
+${level === 'detailed' ? '- Generate at least 12 SPECIFIC ROOMS - MUST use unit_based for any room that repeats' : ''}
+
+OUTPUT FORMAT:
+{
+  "message": "Breaking down [zone] into ${level} sub-areas...",
+  "intent": {
+    "type": "expand_area",
+    "parentName": "[zone name]",
+    "parentArea": [parent area in m²],
+    "children": [
+${useUnitBased ? `      { "name": "Standard Room", "formula": { "type": "unit_based", "areaPerUnit": 32, "unitCount": 50, "reasoning": "50 standard rooms" } },
+      { "name": "Lobby", "formula": { "type": "ratio", "percentage": 10, "reasoning": "Main lobby area" } }` : `      { "name": "Guest Wing", "formula": { "type": "ratio", "percentage": 50, "reasoning": "Main accommodation zone" } },
+      { "name": "Public Zone", "formula": { "type": "ratio", "percentage": 30, "reasoning": "Lobby, F&B, amenities" } }`}
+    ]
+  }
+}`;
   
   return prompt;
 }
@@ -537,6 +558,50 @@ interface EvaluatedArea {
 }
 
 /**
+ * Extended area spec that accepts both AI formats:
+ * - Old format: { name, formula, groupHint }
+ * - New format: { name, totalArea, count?, groupHint }
+ */
+interface AIAreaSpec {
+  name: string;
+  formula?: AreaFormula;
+  totalArea?: number;
+  count?: number;
+  groupHint?: string;
+}
+
+/**
+ * Normalize AI area spec to FormulaAreaSpec
+ * Handles both old formula format and new totalArea format
+ */
+function normalizeAreaSpec(spec: AIAreaSpec, targetTotal: number): FormulaAreaSpec {
+  // If already has formula, return as-is
+  if (spec.formula) {
+    return {
+      name: spec.name,
+      formula: spec.formula,
+      groupHint: spec.groupHint,
+    };
+  }
+  
+  // Convert totalArea format to fixed formula
+  const totalAreaValue = spec.totalArea || 0;
+  const count = spec.count || 1;
+  const areaPerUnit = Math.round(totalAreaValue / count);
+  
+  return {
+    name: spec.name,
+    formula: {
+      type: 'fixed',
+      value: areaPerUnit,
+      count: count,
+      reasoning: `${totalAreaValue}m² total${count > 1 ? ` (${count} × ${areaPerUnit}m²)` : ''}`,
+    },
+    groupHint: spec.groupHint,
+  };
+}
+
+/**
  * Simple formula evaluation without full tree structure
  * Handles the common cases from AI output
  * 
@@ -546,16 +611,19 @@ interface EvaluatedArea {
  * 3. Remainder formula (absorbs leftover)
  */
 function evaluateFormulas(
-  areas: FormulaAreaSpec[],
+  areas: FormulaAreaSpec[] | AIAreaSpec[],
   totalArea: number
 ): EvaluatedArea[] {
+  // Normalize all areas to FormulaAreaSpec format
+  const normalizedAreas = (areas as AIAreaSpec[]).map(spec => normalizeAreaSpec(spec, totalArea));
+  
   const results: Map<string, EvaluatedArea> = new Map();
   let remainderName: string | null = null;
   const derivedAreas: Array<{ spec: FormulaAreaSpec; index: number }> = [];
   
   // PASS 1: Evaluate independent formulas (fixed, unit_based, ratio, fallback)
-  for (let i = 0; i < areas.length; i++) {
-    const area = areas[i];
+  for (let i = 0; i < normalizedAreas.length; i++) {
+    const area = normalizedAreas[i];
     const formula = area.formula;
     
     let totalAreaComputed = 0;
@@ -717,7 +785,7 @@ function evaluateFormulas(
   
   // PASS 3: Calculate remainder
   if (remainderName) {
-    const remainderSpec = areas.find(a => a.name === remainderName)!;
+    const remainderSpec = normalizedAreas.find(a => a.name === remainderName)!;
     const remainderFormula = remainderSpec.formula;
     
     // Sum all computed areas
@@ -902,4 +970,260 @@ export interface ClarificationState {
   originalBrief?: string;
   options?: ClarificationOption[];
   message?: string;
+}
+
+// ============================================
+// AGENT PROMPT CLASSIFICATION
+// ============================================
+
+export type AgentIntentType = 'create' | 'unfold' | 'organize' | 'unsupported';
+
+export interface AgentIntentClassification {
+  type: AgentIntentType;
+  confidence: number;
+  details?: string;
+}
+
+/**
+ * Classify user prompt into one of the supported agent actions:
+ * - create: Generate a new program with groups/areas for a typology
+ * - unfold: Expand a single selected area into sub-areas
+ * - organize: Group/cluster multiple areas into logical groups
+ * - unsupported: Prompt doesn't match any supported action
+ */
+export function classifyAgentIntent(
+  prompt: string,
+  hasSelectedAreas: boolean,
+  selectedCount: number
+): AgentIntentClassification {
+  const lower = prompt.toLowerCase();
+  
+  // CREATE patterns: generate a new program
+  const createPatterns = [
+    /\b(create|generate|make|design|plan)\b.*\b(program|brief|layout|building|hotel|office|apartment|residential|commercial|school|hospital|museum|library|retail|restaurant|warehouse|factory)\b/i,
+    /\b(program|brief)\b.*\b(for|of)\b/i,
+    /\b\d[\d,]*\s*(?:sqm|m²|m2|square)/i, // Has area specification
+  ];
+  
+  // UNFOLD patterns: expand/divide a single area
+  const unfoldPatterns = [
+    /\b(unfold|expand|divide|grain|break\s*down|detail|sub-?divide|elaborate|split\s*into)\b/i,
+  ];
+  
+  // ORGANIZE patterns: group/cluster multiple areas
+  const organizePatterns = [
+    /\b(group|organize|cluster|categorize|sort|arrange)\b.*\b(areas?|spaces?|rooms?)\b/i,
+    /\b(areas?|spaces?|rooms?)\b.*\b(by|into)\b.*\b(function|type|category|zone|public|private)\b/i,
+    /\b(re-?organize|re-?group|re-?cluster)\b/i,
+  ];
+  
+  // Check UNFOLD first (needs selection)
+  if (unfoldPatterns.some(p => p.test(lower))) {
+    if (!hasSelectedAreas) {
+      return {
+        type: 'unsupported',
+        confidence: 0.9,
+        details: 'Unfold requires selecting an area first. Please select one area to expand.'
+      };
+    }
+    if (selectedCount > 1) {
+      return {
+        type: 'unsupported',
+        confidence: 0.9,
+        details: 'Unfold works on one area at a time. Please select a single area to expand.'
+      };
+    }
+    return { type: 'unfold', confidence: 0.95 };
+  }
+  
+  // Check ORGANIZE (works best with multiple selections)
+  if (organizePatterns.some(p => p.test(lower))) {
+    if (!hasSelectedAreas || selectedCount < 2) {
+      return {
+        type: 'unsupported',
+        confidence: 0.9,
+        details: 'Organize requires selecting multiple areas. Please select 2+ areas to group.'
+      };
+    }
+    return { type: 'organize', confidence: 0.9 };
+  }
+  
+  // Check CREATE (no selection needed)
+  if (createPatterns.some(p => p.test(lower))) {
+    return { type: 'create', confidence: 0.9 };
+  }
+  
+  // Fallback: if has typology keywords without action, assume create
+  const typologyKeywords = /\b(hotel|office|apartment|residential|commercial|school|hospital|museum|library|retail|restaurant|warehouse|factory|building|facility|center|centre)\b/i;
+  if (typologyKeywords.test(lower)) {
+    return { type: 'create', confidence: 0.7 };
+  }
+  
+  return {
+    type: 'unsupported',
+    confidence: 0.8,
+    details: 'I can help you **Create** a program, **Unfold** an area, or **Organize** areas into groups. Try:\n• "Create a hotel program of 5000 sqm"\n• Select an area and say "unfold with focus on..."\n• Select multiple areas and say "organize by function"'
+  };
+}
+
+// ============================================
+// ORGANIZE AREAS INTO GROUPS
+// ============================================
+
+export interface OrganizeAreasIntent {
+  type: 'organize_areas';
+  groups: Array<{
+    name: string;
+    reasoning: string;
+    areaIds: string[];
+  }>;
+}
+
+export interface OrganizeAIResponse {
+  message: string;
+  intent?: OrganizeAreasIntent;
+  warnings?: string[];
+}
+
+/**
+ * Organize multiple areas into logical groups based on user criteria
+ */
+export async function organizeAreas(
+  areas: AreaNode[],
+  criteria?: string
+): Promise<OrganizeAIResponse> {
+  if (areas.length < 2) {
+    return {
+      message: 'Please select at least 2 areas to organize into groups.',
+      warnings: ['insufficient_selection'],
+    };
+  }
+  
+  const systemPrompt = `You are an architectural programming assistant. Your task is to organize areas into logical groups.
+
+RULES:
+- Never include circulation, core, MEP, lifts, or staircases
+- Focus on creative architectural organization, not technical considerations
+- Group by logical relationships: function, privacy level, access patterns, or user-specified criteria
+- Each area must belong to exactly one group
+- Provide clear reasoning for each group
+
+OUTPUT FORMAT (JSON only):
+{
+  "message": "Brief description of the organization strategy",
+  "intent": {
+    "type": "organize_areas",
+    "groups": [
+      {
+        "name": "Group Name",
+        "reasoning": "Why these areas belong together",
+        "areaIds": ["id1", "id2"]
+      }
+    ]
+  }
+}`;
+
+  const areaList = areas.map(a => `- ID: "${a.id}" | Name: "${a.name}" | ${formatArea(a.areaPerUnit * a.count)}`).join('\n');
+  
+  let userPrompt = `Organize these areas into groups:\n\n${areaList}`;
+  
+  if (criteria) {
+    userPrompt += `\n\nOrganization criteria: ${criteria}`;
+  } else {
+    userPrompt += `\n\nOrganize by logical function and relationship.`;
+  }
+  
+  try {
+    const response = await fetch(API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${getApiKey()}`,
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        temperature: 0.7,
+        response_format: { type: 'json_object' },
+      }),
+    });
+    
+    if (!response.ok) {
+      throw new Error(`API error: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content;
+    
+    if (!content) {
+      throw new Error('Empty response from AI');
+    }
+    
+    const parsed = JSON.parse(content) as OrganizeAIResponse;
+    return parsed;
+    
+  } catch (error) {
+    console.error('[organizeAreas] Error:', error);
+    return {
+      message: 'Failed to organize areas. Please try again.',
+      warnings: ['api_error'],
+    };
+  }
+}
+
+/**
+ * Convert organize intent to proposals
+ * Creates a single CreateGroupsProposal with all the groups
+ */
+export function organizeIntentToProposals(
+  response: OrganizeAIResponse,
+  originalAreas: AreaNode[]
+): Proposal[] {
+  if (!response.intent || response.intent.type !== 'organize_areas') {
+    return [];
+  }
+  
+  // Build groups array for CreateGroupsProposal
+  const groupsData: Array<{
+    name: string;
+    color: string;
+    memberNodeIds: string[];
+    memberNames: string[];
+  }> = [];
+  
+  // Color palette for groups
+  const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
+  
+  for (let i = 0; i < response.intent.groups.length; i++) {
+    const group = response.intent.groups[i];
+    
+    // Find the actual area nodes for this group
+    const groupAreas = group.areaIds
+      .map(id => originalAreas.find(a => a.id === id))
+      .filter((a): a is AreaNode => a !== undefined);
+    
+    if (groupAreas.length === 0) continue;
+    
+    groupsData.push({
+      name: group.name,
+      color: colors[i % colors.length],
+      memberNodeIds: groupAreas.map(a => a.id!),
+      memberNames: groupAreas.map(a => a.name),
+    });
+  }
+  
+  if (groupsData.length === 0) {
+    return [];
+  }
+  
+  // Return a single CreateGroupsProposal
+  return [{
+    id: uuidv4(),
+    type: 'create_groups',
+    status: 'pending',
+    groups: groupsData,
+  }];
 }
