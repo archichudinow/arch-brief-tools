@@ -69,9 +69,9 @@ export interface ToolResult {
 // ============================================
 
 export interface AgentContext {
-  /** All nodes in project */
+  /** All nodes in project (scoped to current container if inside one) */
   nodes: Record<string, AreaNode>;
-  /** All groups in project */
+  /** All groups in project (empty when inside a container) */
   groups: Record<string, Group>;
   /** Currently selected node IDs */
   selectedNodeIds: string[];
@@ -81,6 +81,8 @@ export interface AgentContext {
   detailLevel: ExpandDetailLevel;
   /** Project context/notes */
   projectContext?: string;
+  /** Current container ID if navigated inside one */
+  containerId?: string;
 }
 
 export interface AgentMessage {

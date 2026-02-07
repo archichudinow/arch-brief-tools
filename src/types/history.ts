@@ -41,6 +41,11 @@ export type ActionType =
   | 'merge_quantities'
   | 'merge_nodes'
   | 'split_node'
+  | 'convert_to_container'
+  | 'add_child_to_container'
+  | 'move_to_container'
+  | 'unwrap_container'
+  | 'collapse_container'
   | 'split_by_quantity'
   | 'split_by_equal'
   | 'split_by_area'
@@ -68,4 +73,6 @@ export type ActionType =
   | 'ai-add-notes'
   | 'ai-split-group'
   | 'ai-split-group-prop'
-  | 'ai-merge-group';
+  | 'ai-merge-group'
+  | 'delete-areas'
+  | 'delete-groups';

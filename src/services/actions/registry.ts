@@ -20,9 +20,9 @@ import type { ExpandDetailLevel } from '../formulaService';
 export type SelectionRequirement = 'none' | 'single' | 'multiple' | 'any';
 
 export interface ActionContext {
-  /** All nodes in project */
+  /** All nodes in project (scoped to current container if inside one) */
   nodes: Record<string, AreaNode>;
-  /** All groups in project */
+  /** All groups in project (empty when inside a container) */
   groups: Record<string, Group>;
   /** Detail level for create/unfold */
   detailLevel: ExpandDetailLevel;
@@ -30,6 +30,8 @@ export interface ActionContext {
   prompt: string;
   /** Project-level context/notes */
   projectContext?: string;
+  /** Current container ID if navigated inside one */
+  containerId?: string;
 }
 
 export interface ValidationResult {

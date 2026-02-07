@@ -40,6 +40,9 @@ import {
   MoreHorizontal,
   Scissors,
   Hash,
+  FolderOpen,
+  FolderInput,
+  PackageOpen,
 } from 'lucide-react';
 import { SplitDialog } from './SplitDialog';
 import { SplitEqualDialog } from './SplitEqualDialog';
@@ -62,6 +65,7 @@ function MultiSelectInspector({
   mergeNodes,
   assignToGroup,
   clearSelection,
+  deleteNode,
 }: {
   selectedNodeIds: string[];
   nodes: Record<string, any>;
@@ -71,6 +75,7 @@ function MultiSelectInspector({
   mergeNodes: (ids: string[], name: string) => string | null;
   assignToGroup: (groupId: string, nodeIds: string[]) => void;
   clearSelection: () => void;
+  deleteNode: (id: string) => void;
 }) {
   const selectedNodes = selectedNodeIds.map(id => nodes[id]).filter(Boolean);
   const totalCount = selectedNodes.reduce((sum, n) => sum + n.count, 0);
@@ -109,6 +114,13 @@ function MultiSelectInspector({
       clearSelection();
       toast.success(`Merged quantities: ×${totalCount}`);
     }
+  };
+
+  const handleDeleteAll = () => {
+    const count = selectedNodeIds.length;
+    selectedNodeIds.forEach(id => deleteNode(id));
+    clearSelection();
+    toast.success(`Deleted ${count} areas`);
   };
 
   return (
@@ -169,6 +181,19 @@ function MultiSelectInspector({
               Merge into One Area
             </Button>
 
+            <Separator className="my-2" />
+
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full justify-start text-destructive hover:text-destructive hover:bg-destructive/10"
+              onClick={handleDeleteAll}
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              Delete All ({selectedNodeIds.length})
+              <span className="ml-auto text-xs opacity-60">Del</span>
+            </Button>
+
             {availableGroups.length > 0 && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -227,11 +252,15 @@ export function AreaInspector() {
   const addNoteToArea = useProjectStore((s) => s.addNoteToArea);
   const updateNote = useProjectStore((s) => s.updateNote);
   const deleteNote = useProjectStore((s) => s.deleteNote);
+  const convertToContainer = useProjectStore((s) => s.convertToContainer);
+  const unwrapContainer = useProjectStore((s) => s.unwrapContainer);
+  const collapseContainer = useProjectStore((s) => s.collapseContainer);
 
   const selectedNodeIds = useUIStore((s) => s.selectedNodeIds);
   const inspectorTab = useUIStore((s) => s.inspectorTab);
   const setInspectorTab = useUIStore((s) => s.setInspectorTab);
   const clearSelection = useUIStore((s) => s.clearSelection);
+  const openContainer = useUIStore((s) => s.openContainer);
 
   const [showSplitDialog, setShowSplitDialog] = useState(false);
   const [showSplitEqualDialog, setShowSplitEqualDialog] = useState(false);
@@ -253,6 +282,7 @@ export function AreaInspector() {
         mergeNodes={mergeNodes}
         assignToGroup={assignToGroup}
         clearSelection={clearSelection}
+        deleteNode={deleteNode}
       />
     );
   }
@@ -338,6 +368,33 @@ export function AreaInspector() {
     return (selectedNode.lockedFields || []).includes(field);
   };
 
+  // Container operations
+  const handleConvertToContainer = () => {
+    const totalArea = (derived?.effectiveAreaPerUnit ?? selectedNode.areaPerUnit) * selectedNode.count;
+    convertToContainer(selectedNode.id);
+    toast.success(`"${selectedNode.name}" is now a container with ${totalArea.toLocaleString()}m² moved inside`);
+  };
+
+  const handleOpenContainer = () => {
+    openContainer(selectedNode.id);
+  };
+
+  const handleUnwrapContainer = () => {
+    const childCount = selectedNode.children?.length || 0;
+    if (confirm(`Unwrap "${selectedNode.name}"? ${childCount} child areas will be moved to current level.`)) {
+      const childIds = unwrapContainer(selectedNode.id);
+      clearSelection();
+      toast.success(`Unwrapped container (${childIds.length} areas moved)`);
+    }
+  };
+
+  const handleCollapseContainer = () => {
+    if (selectedNode && derived?.isContainer) {
+      collapseContainer(selectedNode.id);
+      toast.success(`Collapsed to ${derived.totalArea.toLocaleString()}m² × 1`);
+    }
+  };
+
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
@@ -406,18 +463,23 @@ export function AreaInspector() {
                     {derived?.hasInstanceLink && (
                       <span className="text-blue-500 ml-1 text-[10px]">(linked)</span>
                     )}
-                  </Label>
-                  <button
-                    className="p-1 rounded hover:bg-muted"
-                    onClick={() => toggleLock('areaPerUnit')}
-                    title={isLocked('areaPerUnit') ? 'Unlock' : 'Lock'}
-                  >
-                    {isLocked('areaPerUnit') ? (
-                      <Lock className="h-3 w-3 text-amber-500" />
-                    ) : (
-                      <Unlock className="h-3 w-3 text-muted-foreground/50" />
+                    {derived?.isContainer && (
+                      <span className="text-blue-500 ml-1 text-[10px]">(sum of children)</span>
                     )}
-                  </button>
+                  </Label>
+                  {!derived?.isContainer && (
+                    <button
+                      className="p-1 rounded hover:bg-muted"
+                      onClick={() => toggleLock('areaPerUnit')}
+                      title={isLocked('areaPerUnit') ? 'Unlock' : 'Lock'}
+                    >
+                      {isLocked('areaPerUnit') ? (
+                        <Lock className="h-3 w-3 text-amber-500" />
+                      ) : (
+                        <Unlock className="h-3 w-3 text-muted-foreground/50" />
+                      )}
+                    </button>
+                  )}
                 </div>
                 <div className="relative">
                   <Input
@@ -425,14 +487,14 @@ export function AreaInspector() {
                     type="number"
                     step="0.1"
                     min="0"
-                    value={derived?.effectiveAreaPerUnit ?? selectedNode.areaPerUnit}
+                    value={derived?.isContainer ? derived.totalArea : (derived?.effectiveAreaPerUnit ?? selectedNode.areaPerUnit)}
                     onChange={(e) => {
                       const num = parseFloat(e.target.value);
                       if (!isNaN(num) && num > 0) {
                         updateNode(selectedNode.id, { areaPerUnit: num });
                       }
                     }}
-                    disabled={isLocked('areaPerUnit')}
+                    disabled={isLocked('areaPerUnit') || derived?.isContainer}
                     className="h-8 pr-10"
                   />
                   <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">m²</span>
@@ -442,7 +504,9 @@ export function AreaInspector() {
               {/* Count */}
               <div className="space-y-1">
                 <div className="flex items-center justify-between">
-                  <Label htmlFor="count" className="text-xs text-muted-foreground">Count</Label>
+                  <Label htmlFor="count" className="text-xs text-muted-foreground">
+                    Count
+                  </Label>
                   <button
                     className="p-1 rounded hover:bg-muted"
                     onClick={() => toggleLock('count')}
@@ -471,6 +535,34 @@ export function AreaInspector() {
                 />
               </div>
             </div>
+
+            {/* Container Info Card */}
+            {derived?.isContainer && (
+              <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg p-2.5">
+                <div className="flex items-center gap-1.5 mb-2">
+                  <FolderOpen className="h-3.5 w-3.5 text-blue-500" />
+                  <span className="text-xs font-medium text-blue-700 dark:text-blue-300">Container</span>
+                  <span className="text-[10px] text-blue-500 ml-auto bg-blue-100 dark:bg-blue-900 px-1.5 py-0.5 rounded-full">
+                    {selectedNode.children?.length || 0} areas inside
+                  </span>
+                </div>
+                <div className="text-xs space-y-1 text-blue-600 dark:text-blue-400">
+                  <div className="flex justify-between">
+                    <span>Total Area:</span>
+                    <span className="font-medium">{derived.totalArea.toLocaleString()}m² (sum of children)</span>
+                  </div>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full mt-2 text-blue-600 border-blue-300 hover:bg-blue-100 dark:text-blue-400 dark:border-blue-700 dark:hover:bg-blue-900"
+                  onClick={handleOpenContainer}
+                >
+                  <FolderOpen className="h-3.5 w-3.5 mr-1.5" />
+                  Open Container
+                </Button>
+              </div>
+            )}
 
             {/* Instance Link Card */}
             {derived?.hasInstanceLink && (
@@ -681,6 +773,53 @@ export function AreaInspector() {
                   </DropdownMenuContent>
                 </DropdownMenu>
               )}
+
+              {/* Container Operations */}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm" className="w-full justify-start">
+                    <FolderOpen className="h-4 w-4 mr-2" />
+                    Container
+                    <ChevronDown className="h-3 w-3 ml-auto" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-52">
+                  {derived?.isContainer ? (
+                    <>
+                      <DropdownMenuItem onClick={handleOpenContainer}>
+                        <FolderOpen className="h-4 w-4 mr-2 text-blue-500" />
+                        <div>
+                          <div>Open Container</div>
+                          <div className="text-[10px] text-muted-foreground">{selectedNode.children?.length || 0} areas inside</div>
+                        </div>
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={handleUnwrapContainer}>
+                        <PackageOpen className="h-4 w-4 mr-2 text-amber-500" />
+                        <div>
+                          <div>Unwrap Container</div>
+                          <div className="text-[10px] text-muted-foreground">Move children out, delete</div>
+                        </div>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={handleCollapseContainer}>
+                        <Layers className="h-4 w-4 mr-2 text-purple-500" />
+                        <div>
+                          <div>Collapse Container</div>
+                          <div className="text-[10px] text-muted-foreground">Consume children → {derived?.totalArea.toLocaleString()}m² × 1</div>
+                        </div>
+                      </DropdownMenuItem>
+                    </>
+                  ) : (
+                    <DropdownMenuItem onClick={handleConvertToContainer}>
+                      <FolderInput className="h-4 w-4 mr-2 text-green-500" />
+                      <div>
+                        <div>Convert to Container</div>
+                        <div className="text-[10px] text-muted-foreground">Move {derived?.totalArea.toLocaleString()}m² inside</div>
+                      </div>
+                    </DropdownMenuItem>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
 
               {/* Group Assignment */}
               {availableGroups.length > 0 && (

@@ -2,12 +2,15 @@ import { useMemo, useState, useRef } from 'react';
 import { useTheme } from 'next-themes';
 import type { LayoutRect } from './useGridLayout';
 import { lightenColor, darkenColor } from './useGridLayout';
+import { FolderOpen } from 'lucide-react';
 
 interface AreaCardProps {
   rect: LayoutRect;
   isSelected: boolean;
   isDragging?: boolean;
+  isContainer?: boolean;
   onSelect: (id: string, append: boolean, rangeSelect?: boolean) => void;
+  onDoubleClick?: (id: string) => void;
   onDragStart?: (id: string) => void;
   onDrag?: (id: string, deltaX: number, deltaY: number) => void;
   onDrop?: (id: string, x: number, y: number, currentGroupId: string | null) => void;
@@ -24,8 +27,10 @@ interface AreaCardProps {
 export function AreaCard({ 
   rect, 
   isSelected, 
-  isDragging: isDraggingProp, 
+  isDragging: isDraggingProp,
+  isContainer,
   onSelect,
+  onDoubleClick,
   onDragStart,
   onDrag,
   onDrop,
@@ -69,6 +74,13 @@ export function AreaCard({
     const rangeSelect = e.shiftKey;
     const append = e.ctrlKey || e.metaKey;
     onSelect(id, append, rangeSelect);
+  };
+
+  const handleDoubleClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onDoubleClick && isContainer) {
+      onDoubleClick(id);
+    }
   };
 
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -148,12 +160,22 @@ export function AreaCard({
         backgroundColor: bgColor,
         borderWidth: 1,
         borderStyle: 'solid',
-        borderColor,
+        borderColor: borderColor,
       }}
       onClick={handleClick}
+      onDoubleClick={handleDoubleClick}
       onMouseDown={handleMouseDown}
-      title={`${name}\n${count} × ${areaPerUnit.toLocaleString()}m² = ${area.toLocaleString()}m²`}
+      title={`${name}${isContainer ? ' (Container - double-click to open)' : ''}\n${count} × ${areaPerUnit.toLocaleString()}m² = ${area.toLocaleString()}m²`}
     >
+      {/* Container indicator - top right corner */}
+      {isContainer && (
+        <div 
+          className="absolute top-0.5 right-0.5 select-none pointer-events-none"
+          style={{ color: borderColor }}
+        >
+          <FolderOpen className="w-3 h-3" />
+        </div>
+      )}
       {/* Area name label - top left corner for large areas */}
       {showNameLabel && (
         <div 

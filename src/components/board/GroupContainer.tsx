@@ -15,6 +15,8 @@ interface GroupContainerProps {
   onDragAreaStart?: (areaId: string) => void;
   onDragArea?: (areaId: string, deltaX: number, deltaY: number) => void;
   onDropArea?: (areaId: string, x: number, y: number, groupId: string | null) => void;
+  onOpenContainer?: (containerId: string) => void;
+  isNodeContainer?: (nodeId: string) => boolean;
   areaOffsets?: Record<string, { x: number; y: number }>;
   offsetX?: number;
   offsetY?: number;
@@ -34,6 +36,8 @@ export function GroupContainer({
   onDragAreaStart,
   onDragArea,
   onDropArea,
+  onOpenContainer,
+  isNodeContainer,
   areaOffsets = {},
   offsetX = 0,
   offsetY = 0,
@@ -233,6 +237,7 @@ export function GroupContainer({
       {/* Children (area cards) - positioned relative to container */}
       {group.children.map((rect) => {
         const areaOffset = areaOffsets[rect.id] || { x: 0, y: 0 };
+        const isContainer = isNodeContainer?.(rect.id) ?? false;
         return (
           <AreaCard
             key={rect.id}
@@ -243,7 +248,9 @@ export function GroupContainer({
               y: rect.y,
             }}
             isSelected={selectedNodeIds.includes(rect.id)}
+            isContainer={isContainer}
             onSelect={onSelectNode}
+            onDoubleClick={onOpenContainer}
             onDragStart={onDragAreaStart}
             onDrag={onDragArea}
             onDrop={onDropArea}

@@ -7,6 +7,7 @@ import { AreaBoard } from '@/components/board';
 import { useProjectStore, useHistoryStore, useUIStore } from '@/stores';
 import { useEffect } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { toast } from 'sonner';
 
 function App() {
   const nodes = useProjectStore((s) => s.nodes);
@@ -32,6 +33,56 @@ function App() {
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Skip if user is typing in an input field
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+        return;
+      }
+
+      // Delete: Delete or Backspace key
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        const uiState = useUIStore.getState();
+        const projectState = useProjectStore.getState();
+        
+        if (uiState.selectedNodeIds.length > 0) {
+          e.preventDefault();
+          const count = uiState.selectedNodeIds.length;
+          
+          // Snapshot before deletion
+          useHistoryStore.getState().snapshot(
+            'delete-areas',
+            `Delete ${count} area${count > 1 ? 's' : ''}`,
+            { nodes: projectState.nodes, groups: projectState.groups }
+          );
+          
+          // Delete all selected nodes
+          uiState.selectedNodeIds.forEach(id => {
+            projectState.deleteNode(id);
+          });
+          
+          uiState.clearSelection();
+          toast.success(`Deleted ${count} area${count > 1 ? 's' : ''}`);
+        } else if (uiState.selectedGroupIds.length > 0) {
+          e.preventDefault();
+          const count = uiState.selectedGroupIds.length;
+          
+          // Snapshot before deletion
+          useHistoryStore.getState().snapshot(
+            'delete-groups',
+            `Delete ${count} group${count > 1 ? 's' : ''}`,
+            { nodes: projectState.nodes, groups: projectState.groups }
+          );
+          
+          // Delete all selected groups
+          uiState.selectedGroupIds.forEach(id => {
+            projectState.deleteGroup(id);
+          });
+          
+          uiState.clearSelection();
+          toast.success(`Deleted ${count} group${count > 1 ? 's' : ''}`);
+        }
+      }
+
       // Undo: Cmd+Z
       if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
         e.preventDefault();

@@ -74,6 +74,16 @@ interface ProjectState {
   mergeQuantities: (nodeIds: UUID[]) => UUID | null;          // Merge same-type groups
   collapseToArea: (id: UUID) => UUID | null;                  // Convert to totalArea × 1, break links
   
+  // Container Operations
+  convertToContainer: (nodeId: UUID) => void;            // Make node a container (children = [])
+  addChildToContainer: (containerId: UUID, input: CreateAreaNodeInput) => UUID | null;  // Create area inside container
+  moveToContainer: (nodeId: UUID, containerId: UUID | null) => void;  // Move node into container (null = root)
+  unwrapContainer: (containerId: UUID) => UUID[];        // Move children to parent level, delete container
+  collapseContainer: (containerId: UUID) => void;        // Collapse container: consume children, become simple area
+  getContainerChildren: (containerId: UUID) => AreaNode[];  // Get direct children of container
+  getTopLevelNodes: () => AreaNode[];                    // Get nodes not inside any container
+  findParentContainer: (nodeId: UUID) => UUID | null;    // Find which container holds this node
+  
   // Split Actions
   splitNodeByQuantity: (nodeId: UUID, quantities: number[]) => UUID[];
   splitNodeByEqual: (nodeId: UUID, parts: number) => UUID[];
@@ -911,6 +921,362 @@ export const useProjectStore = create<ProjectState>()(
       });
 
       return id;
+    },
+
+    // ==========================================
+    // CONTAINER OPERATIONS
+    // ==========================================
+
+    // Convert a node to a container (moves original area inside as first child)
+    convertToContainer: (nodeId) => {
+      const node = get().nodes[nodeId];
+      if (!node) return;
+      
+      // Already a container
+      if (Array.isArray(node.children)) return;
+      
+      const timestamp = now();
+      const childId = uuidv4();
+      
+      // Store original values before converting
+      const originalArea = node.areaPerUnit;
+      const originalCount = node.count;
+      const originalName = node.name;
+      
+      set((state) => {
+        const n = state.nodes[nodeId];
+        if (!n) return;
+        
+        // Create child node with the original area values
+        state.nodes[childId] = {
+          id: childId,
+          name: `${originalName} Area`, // e.g., "Apartment Area"
+          areaPerUnit: originalArea,
+          count: originalCount,
+          notes: [],
+          formulaReasoning: n.formulaReasoning,
+          formulaConfidence: n.formulaConfidence,
+          formulaType: n.formulaType,
+          lockedFields: [],
+          createdAt: timestamp,
+          modifiedAt: timestamp,
+          createdBy: 'user',
+        };
+        
+        // Convert parent to container
+        n.children = [childId];
+        // Reset areaPerUnit since it will now be computed from children
+        n.areaPerUnit = 0;
+        n.count = 1; // Container always count=1
+        n.modifiedAt = timestamp;
+        state.meta.modifiedAt = timestamp;
+      });
+      
+      const newState = get();
+      useHistoryStore.getState().snapshot('convert_to_container', `Converted "${node.name}" to container (moved ${originalArea * originalCount}m² inside)`, {
+        nodes: newState.nodes,
+        groups: newState.groups,
+      });
+    },
+
+    // Create a new area node inside a container
+    addChildToContainer: (containerId, input) => {
+      const state = get();
+      const container = state.nodes[containerId];
+      
+      // Must be a valid container
+      if (!container || !Array.isArray(container.children)) {
+        console.warn('[addChildToContainer] Not a valid container:', containerId);
+        return null;
+      }
+      
+      // Validate input
+      if (input.count < 1 || input.areaPerUnit <= 0) {
+        return null;
+      }
+      
+      const id = uuidv4();
+      const timestamp = now();
+      
+      // Build notes array from input
+      const notes: Note[] = [];
+      if (input.briefNote) {
+        notes.push({
+          id: uuidv4(),
+          source: 'brief',
+          content: input.briefNote,
+          createdAt: timestamp,
+          modifiedAt: timestamp,
+        });
+      }
+      if (input.aiNote) {
+        notes.push({
+          id: uuidv4(),
+          source: 'ai',
+          content: input.aiNote,
+          createdAt: timestamp,
+          modifiedAt: timestamp,
+        });
+      }
+      if (input.userNote) {
+        notes.push({
+          id: uuidv4(),
+          source: 'user',
+          content: input.userNote,
+          createdAt: timestamp,
+          modifiedAt: timestamp,
+        });
+      }
+      
+      set((state) => {
+        // Create the child node
+        state.nodes[id] = {
+          id,
+          name: input.name,
+          areaPerUnit: input.areaPerUnit,
+          count: input.count,
+          notes,
+          formulaReasoning: input.formulaReasoning || null,
+          formulaConfidence: input.formulaConfidence || null,
+          formulaType: input.formulaType || null,
+          lockedFields: [],
+          createdAt: timestamp,
+          modifiedAt: timestamp,
+          createdBy: 'user',
+        };
+        
+        // Add to container's children
+        const c = state.nodes[containerId];
+        if (c && c.children) {
+          c.children.push(id);
+          c.modifiedAt = timestamp;
+        }
+        
+        state.meta.modifiedAt = timestamp;
+      });
+      
+      const newState = get();
+      useHistoryStore.getState().snapshot('add_child_to_container', `Added "${input.name}" to "${container.name}"`, {
+        nodes: newState.nodes,
+        groups: newState.groups,
+      });
+      
+      return id;
+    },
+
+    // Move a node into a container (or to root if containerId is null)
+    moveToContainer: (nodeId, containerId) => {
+      const state = get();
+      const node = state.nodes[nodeId];
+      if (!node) return;
+      
+      // Can't move a node into itself
+      if (nodeId === containerId) return;
+      
+      // Validate target container (if not moving to root)
+      if (containerId) {
+        const targetContainer = state.nodes[containerId];
+        if (!targetContainer || !Array.isArray(targetContainer.children)) {
+          console.warn('[moveToContainer] Target is not a valid container:', containerId);
+          return;
+        }
+        
+        // Can't move container into its own descendant (would create cycle)
+        const isDescendant = (checkId: UUID, ancestorId: UUID): boolean => {
+          const checkNode = state.nodes[checkId];
+          if (!checkNode?.children) return false;
+          if (checkNode.children.includes(ancestorId)) return true;
+          return checkNode.children.some(childId => isDescendant(childId, ancestorId));
+        };
+        if (node.children && isDescendant(nodeId, containerId)) {
+          console.warn('[moveToContainer] Cannot move container into its own descendant');
+          return;
+        }
+      }
+      
+      const timestamp = now();
+      
+      // Find current parent container
+      const currentParentId = Object.keys(state.nodes).find(id => {
+        const n = state.nodes[id];
+        return n.children?.includes(nodeId);
+      });
+      
+      set((state) => {
+        // Remove from current parent (if any)
+        if (currentParentId) {
+          const parent = state.nodes[currentParentId];
+          if (parent?.children) {
+            parent.children = parent.children.filter(id => id !== nodeId);
+            parent.modifiedAt = timestamp;
+          }
+        }
+        
+        // Add to new container (if not moving to root)
+        if (containerId) {
+          const newParent = state.nodes[containerId];
+          if (newParent?.children) {
+            newParent.children.push(nodeId);
+            newParent.modifiedAt = timestamp;
+          }
+        }
+        
+        state.meta.modifiedAt = timestamp;
+      });
+      
+      const newState = get();
+      const actionLabel = containerId 
+        ? `Moved "${node.name}" into "${state.nodes[containerId]?.name}"`
+        : `Moved "${node.name}" to root level`;
+      useHistoryStore.getState().snapshot('move_to_container', actionLabel, {
+        nodes: newState.nodes,
+        groups: newState.groups,
+      });
+    },
+
+    // Unwrap container: move all children to parent level, delete the container
+    unwrapContainer: (containerId) => {
+      const state = get();
+      const container = state.nodes[containerId];
+      if (!container || !Array.isArray(container.children)) {
+        return [];
+      }
+      
+      const childIds = [...container.children];
+      const timestamp = now();
+      
+      // Find parent of this container
+      const parentContainerId = Object.keys(state.nodes).find(id => {
+        const n = state.nodes[id];
+        return n.children?.includes(containerId);
+      });
+      
+      set((state) => {
+        // Move children to parent container (or root)
+        if (parentContainerId) {
+          const parent = state.nodes[parentContainerId];
+          if (parent?.children) {
+            // Remove this container from parent
+            parent.children = parent.children.filter(id => id !== containerId);
+            // Add all grandchildren to parent
+            parent.children.push(...childIds);
+            parent.modifiedAt = timestamp;
+          }
+        }
+        // If no parent, children become top-level (no action needed since they're already nodes)
+        
+        // Remove container from any groups
+        for (const group of Object.values(state.groups)) {
+          group.members = group.members.filter(mid => mid !== containerId);
+        }
+        
+        // Delete the container itself
+        delete state.nodes[containerId];
+        state.meta.modifiedAt = timestamp;
+      });
+      
+      const newState = get();
+      useHistoryStore.getState().snapshot('unwrap_container', `Unwrapped "${container.name}" (${childIds.length} children)`, {
+        nodes: newState.nodes,
+        groups: newState.groups,
+      });
+      
+      return childIds;
+    },
+
+    // Collapse container: consume all children's areas and become a simple area node
+    collapseContainer: (containerId) => {
+      const state = get();
+      const container = state.nodes[containerId];
+      if (!container || !Array.isArray(container.children) || container.children.length === 0) {
+        return;
+      }
+      
+      // Get the total area from all children (recursively via getNodeDerived)
+      const derived = state.getNodeDerived(containerId);
+      const totalArea = derived?.totalArea ?? 0;
+      const childCount = container.children.length;
+      const timestamp = now();
+      
+      // Helper to recursively collect all descendant node IDs
+      const collectDescendants = (nodeId: UUID): UUID[] => {
+        const node = state.nodes[nodeId];
+        if (!node) return [];
+        const ids = [nodeId];
+        if (node.children) {
+          for (const childId of node.children) {
+            ids.push(...collectDescendants(childId));
+          }
+        }
+        return ids;
+      };
+      
+      // Collect all descendant IDs (including nested containers)
+      const allDescendantIds = container.children.flatMap(childId => collectDescendants(childId));
+      
+      set((state) => {
+        // Delete all descendants
+        for (const descendantId of allDescendantIds) {
+          // Remove from any groups
+          for (const group of Object.values(state.groups)) {
+            group.members = group.members.filter(mid => mid !== descendantId);
+          }
+          delete state.nodes[descendantId];
+        }
+        
+        // Update the container to be a simple area
+        const containerNode = state.nodes[containerId];
+        containerNode.areaPerUnit = totalArea;
+        containerNode.count = 1;
+        containerNode.children = undefined; // No longer a container
+        containerNode.modifiedAt = timestamp;
+        
+        state.meta.modifiedAt = timestamp;
+      });
+      
+      const newState = get();
+      useHistoryStore.getState().snapshot('collapse_container', `Collapsed "${container.name}" (${childCount} children → ${totalArea.toLocaleString()}m²)`, {
+        nodes: newState.nodes,
+        groups: newState.groups,
+      });
+    },
+
+    // Get direct children of a container
+    getContainerChildren: (containerId) => {
+      const state = get();
+      const container = state.nodes[containerId];
+      if (!container?.children) return [];
+      
+      return container.children
+        .map(id => state.nodes[id])
+        .filter(Boolean);
+    },
+
+    // Get all nodes NOT inside any container (top-level nodes)
+    getTopLevelNodes: () => {
+      const state = get();
+      const childNodeIds = new Set<UUID>();
+      
+      // Collect all node IDs that are children of some container
+      for (const node of Object.values(state.nodes)) {
+        if (node.children) {
+          node.children.forEach(id => childNodeIds.add(id));
+        }
+      }
+      
+      // Return nodes that are not children of any container
+      return Object.values(state.nodes).filter(node => !childNodeIds.has(node.id));
+    },
+
+    // Find which container holds this node (if any)
+    findParentContainer: (nodeId) => {
+      const state = get();
+      for (const [id, node] of Object.entries(state.nodes)) {
+        if (node.children?.includes(nodeId)) {
+          return id as UUID;
+        }
+      }
+      return null;
     },
 
     // ==========================================

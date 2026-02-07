@@ -33,6 +33,10 @@ interface UIState {
   // Board interaction mode
   isAddingComment: boolean;
   
+  // Container navigation
+  openContainerId: UUID | null;  // null = root level, shows top-level nodes
+  containerPath: UUID[];         // breadcrumb trail [grandparent, parent, current]
+  
   // AI settings
   detailLevel: DetailLevel;
   expandDepth: ExpandDepth;
@@ -57,6 +61,12 @@ interface UIState {
   // Actions - Board interaction
   setAddingComment: (adding: boolean) => void;
   
+  // Actions - Container navigation
+  openContainer: (id: UUID, path?: UUID[]) => void;  // enter container, optionally with full path
+  closeContainer: () => void;                         // go up one level
+  goToRoot: () => void;                               // return to root level
+  navigateToPath: (index: number) => void;            // navigate to specific breadcrumb
+  
   // Actions - AI settings
   setDetailLevel: (level: DetailLevel) => void;
   setExpandDepth: (depth: ExpandDepth) => void;
@@ -78,6 +88,8 @@ export const useUIStore = create<UIState>()(
     leftPanelCollapsed: false,
     rightPanelCollapsed: false,
     isAddingComment: false,
+    openContainerId: null,
+    containerPath: [],
     detailLevel: 'standard',
     expandDepth: 2,
 
@@ -185,6 +197,66 @@ export const useUIStore = create<UIState>()(
     setAddingComment: (adding) => {
       set((state) => {
         state.isAddingComment = adding;
+      });
+    },
+
+    // Container navigation actions
+    openContainer: (id, path) => {
+      set((state) => {
+        state.openContainerId = id;
+        if (path) {
+          state.containerPath = path;
+        } else {
+          // Append to existing path
+          state.containerPath = [...state.containerPath, id];
+        }
+        // Clear selection when navigating
+        state.selectedNodeIds = [];
+        state.selectedGroupIds = [];
+      });
+    },
+
+    closeContainer: () => {
+      set((state) => {
+        if (state.containerPath.length > 1) {
+          // Go up one level
+          state.containerPath = state.containerPath.slice(0, -1);
+          state.openContainerId = state.containerPath[state.containerPath.length - 1];
+        } else {
+          // Return to root
+          state.containerPath = [];
+          state.openContainerId = null;
+        }
+        // Clear selection when navigating
+        state.selectedNodeIds = [];
+        state.selectedGroupIds = [];
+      });
+    },
+
+    goToRoot: () => {
+      set((state) => {
+        state.openContainerId = null;
+        state.containerPath = [];
+        // Clear selection when navigating
+        state.selectedNodeIds = [];
+        state.selectedGroupIds = [];
+      });
+    },
+
+    navigateToPath: (index) => {
+      set((state) => {
+        if (index < 0) {
+          // Navigate to root
+          state.openContainerId = null;
+          state.containerPath = [];
+        } else if (index < state.containerPath.length) {
+          // Navigate to specific point in path
+          state.containerPath = state.containerPath.slice(0, index + 1);
+          state.openContainerId = state.containerPath[index];
+        }
+        // Clear selection when navigating
+        state.selectedNodeIds = [];
+        state.selectedGroupIds = [];
       });
     },
 

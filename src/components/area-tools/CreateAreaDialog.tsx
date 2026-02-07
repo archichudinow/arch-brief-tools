@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useProjectStore } from '@/stores';
+import { useProjectStore, useUIStore } from '@/stores';
 import {
   Dialog,
   DialogContent,
@@ -18,6 +18,8 @@ interface CreateAreaDialogProps {
 
 export function CreateAreaDialog({ open, onOpenChange }: CreateAreaDialogProps) {
   const createNode = useProjectStore((s) => s.createNode);
+  const addChildToContainer = useProjectStore((s) => s.addChildToContainer);
+  const openContainerId = useUIStore((s) => s.openContainerId);
 
   const [name, setName] = useState('');
   const [areaPerUnit, setAreaPerUnit] = useState('');
@@ -55,11 +57,20 @@ export function CreateAreaDialog({ open, onOpenChange }: CreateAreaDialogProps) 
       return;
     }
 
-    createNode({
-      name: name.trim(),
-      areaPerUnit: areaNum,
-      count: countNum,
-    });
+    // Add to container if we're inside one, otherwise add to root
+    if (openContainerId) {
+      addChildToContainer(openContainerId, {
+        name: name.trim(),
+        areaPerUnit: areaNum,
+        count: countNum,
+      });
+    } else {
+      createNode({
+        name: name.trim(),
+        areaPerUnit: areaNum,
+        count: countNum,
+      });
+    }
 
     resetForm();
     onOpenChange(false);

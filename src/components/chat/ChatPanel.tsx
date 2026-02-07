@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, type ReactNode } from 'react';
+import { useRef, useEffect, useState, useMemo, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -68,6 +68,31 @@ export function ChatPanel() {
   
   const nodes = useProjectStore((s) => s.nodes);
   const groups = useProjectStore((s) => s.groups);
+  const getContainerChildren = useProjectStore((s) => s.getContainerChildren);
+  const getTopLevelNodes = useProjectStore((s) => s.getTopLevelNodes);
+  
+  // Container navigation context
+  const openContainerId = useUIStore((s) => s.openContainerId);
+  
+  // Compute context-aware nodes (only nodes at current navigation level)
+  // When inside a container, AI only operates on children of that container
+  const contextNodes = useMemo(() => {
+    if (openContainerId) {
+      // Inside a container: only include its children
+      const children = getContainerChildren(openContainerId);
+      const childrenMap: Record<string, typeof nodes[string]> = {};
+      children.forEach(child => { childrenMap[child.id] = child; });
+      return childrenMap;
+    }
+    // Root level: include top-level nodes (not inside any container)
+    const topLevel = getTopLevelNodes();
+    const topLevelMap: Record<string, typeof nodes[string]> = {};
+    topLevel.forEach(node => { topLevelMap[node.id] = node; });
+    return topLevelMap;
+  }, [nodes, openContainerId, getContainerChildren, getTopLevelNodes]);
+  
+  // Container info for context messages
+  const openContainer = openContainerId ? nodes[openContainerId] : null;
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -127,14 +152,20 @@ export function ChatPanel() {
     setLoading(true);
     
     try {
-      // Build action context
+      // Build action context - use contextNodes (scoped to current container)
       const actionContext: ActionContext = {
-        nodes,
-        groups,
+        nodes: contextNodes,
+        groups: openContainerId ? {} : groups, // No groups inside containers
         detailLevel,
         prompt: content,
         projectContext: projectContext || undefined,
+        containerId: openContainerId || undefined, // Pass container context
       };
+      
+      // Log container context for debugging
+      if (openContainerId) {
+        console.log(`[ChatPanel] AI operating inside container "${openContainer?.name}" (${Object.keys(contextNodes).length} nodes)`);
+      }
       
       // AGENT MODE: Always use full agent
       {
@@ -177,12 +208,13 @@ export function ChatPanel() {
         console.log('[FullAgent] Using OpenAI tool-calling agent');
           
           const agentContext: AgentContext = {
-            nodes,
-            groups,
+            nodes: contextNodes, // Use scoped nodes
+            groups: openContainerId ? {} : groups, // No groups inside containers
             selectedNodeIds,
             selectedGroupIds,
             detailLevel,
             projectContext: projectContext || undefined,
+            containerId: openContainerId || undefined,
           };
           
           try {
@@ -311,12 +343,13 @@ export function ChatPanel() {
       console.log('[FullAgent] Using OpenAI tool-calling agent for enhanced prompt');
       
       const agentContext: AgentContext = {
-        nodes,
-        groups,
+        nodes: contextNodes, // Use scoped nodes
+        groups: openContainerId ? {} : groups, // No groups inside containers
         selectedNodeIds,
         selectedGroupIds,
         detailLevel,
         projectContext: projectContext || undefined,
+        containerId: openContainerId || undefined,
       };
       
       const agentResult = await runAgent(content, agentContext);

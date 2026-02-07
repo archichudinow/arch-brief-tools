@@ -4,7 +4,7 @@ import { useGridLayout, snapToGrid, findGroupAtPosition, GROUP_PADDING, GROUP_HE
 import type { AreaNode, UUID } from '@/types';
 import { GroupContainer } from './GroupContainer';
 import { BoardComment } from './BoardComment';
-import { ZoomIn, ZoomOut, Maximize2, Move, Plus, FolderPlus, MessageSquare, MousePointer2 } from 'lucide-react';
+import { ZoomIn, ZoomOut, Maximize2, Move, Plus, FolderPlus, MessageSquare, MousePointer2, ChevronLeft, FolderOpen } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { CreateAreaDialog } from '@/components/area-tools/CreateAreaDialog';
 import { CreateGroupDialog } from '@/components/group-tools/CreateGroupDialog';
@@ -47,27 +47,65 @@ export function AreaBoard() {
   const groups = useProjectStore((s) => s.groups);
   const getNodeDerived = useProjectStore((s) => s.getNodeDerived);
   const assignToGroup = useProjectStore((s) => s.assignToGroup);
+  const getContainerChildren = useProjectStore((s) => s.getContainerChildren);
+  const getTopLevelNodes = useProjectStore((s) => s.getTopLevelNodes);
   
-  // Compute nodes with effective areas (resolves instance links)
+  // Container navigation from UI store
+  const openContainerId = useUIStore((s) => s.openContainerId);
+  const containerPath = useUIStore((s) => s.containerPath);
+  const openContainer = useUIStore((s) => s.openContainer);
+  const closeContainer = useUIStore((s) => s.closeContainer);
+  
+  // Compute nodes with effective areas (resolves instance links and containers)
   // This ensures instances display with their source's areaPerUnit
+  // And containers display with their computed total area
+  // Also filters to only show nodes at current navigation level
   const nodes = useMemo(() => {
+    // Get nodes at current level
+    let levelNodes: AreaNode[];
+    if (openContainerId) {
+      // Inside a container: show its children
+      levelNodes = getContainerChildren(openContainerId);
+    } else {
+      // Root level: show top-level nodes (not inside any container)
+      levelNodes = getTopLevelNodes();
+    }
+    
+    // Build effective nodes map with resolved instance areas and container totals
     const effectiveNodes: Record<UUID, AreaNode> = {};
-    for (const [id, node] of Object.entries(rawNodes)) {
-      const derived = getNodeDerived(id);
-      if (derived && node.instanceOf) {
+    for (const node of levelNodes) {
+      const derived = getNodeDerived(node.id);
+      if (derived?.isContainer) {
+        // Container: use totalArea (sum of children)
+        effectiveNodes[node.id] = {
+          ...node,
+          areaPerUnit: derived.totalArea, // Container's area is the sum of children
+          count: 1, // Container always count=1
+        };
+        console.debug(`[AreaBoard] Container ${node.name}: using totalArea ${derived.totalArea} from children`);
+      } else if (derived && node.instanceOf) {
         // Instance: use effective area from source
-        effectiveNodes[id] = {
+        effectiveNodes[node.id] = {
           ...node,
           areaPerUnit: derived.effectiveAreaPerUnit,
         };
         console.debug(`[AreaBoard] Instance ${node.name}: using effective area ${derived.effectiveAreaPerUnit} from source`);
       } else {
-        effectiveNodes[id] = node;
+        effectiveNodes[node.id] = node;
       }
     }
     return effectiveNodes;
-  }, [rawNodes, getNodeDerived]);
+  }, [rawNodes, getNodeDerived, openContainerId, getContainerChildren, getTopLevelNodes]);
   const removeFromGroup = useProjectStore((s) => s.removeFromGroup);
+  
+  // When inside a container, don't show regular groups (container children are flat)
+  const effectiveGroups = useMemo(() => {
+    if (openContainerId) {
+      // Inside container: no groups (flat node list)
+      return {};
+    }
+    return groups;
+  }, [groups, openContainerId]);
   
   // Board layout from project store (persisted on export)
   const groupPositions = useProjectStore((s) => s.boardLayout.groupPositions);
@@ -111,7 +149,8 @@ export function AreaBoard() {
   }, []);
 
   // Calculate layout with size overrides
-  const layout = useGridLayout(nodes, groups, dimensions.width, dimensions.height, groupSizeOverrides);
+  // Use effectiveGroups which is empty when inside a container
+  const layout = useGridLayout(nodes, effectiveGroups, dimensions.width, dimensions.height, groupSizeOverrides);
 
   // Ref to track latest group positions without triggering effect re-runs
   const groupPositionsRef = useRef(groupPositions);
@@ -745,14 +784,46 @@ export function AreaBoard() {
         </Button>
       </div>
 
-      {/* Stats overlay */}
-      <div className="absolute top-3 left-3 z-50 bg-card/90 backdrop-blur rounded-lg border border-border px-3 py-2 shadow-sm">
-        <div className="text-xs text-muted-foreground">Total Area</div>
+      {/* Container navigation header - simple bar when inside container */}
+      {containerPath.length > 0 && (
+        <div className="absolute top-3 left-3 z-50 bg-blue-500/10 backdrop-blur border border-blue-400/30 rounded-lg px-3 py-2 shadow-sm">
+          <div className="flex items-center gap-2">
+            {/* Simple back/out button */}
+            <button
+              onClick={closeContainer}
+              className="flex items-center gap-1 text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-200 transition-colors"
+              title={containerPath.length > 1 ? 'Go back to parent container' : 'Exit container'}
+            >
+              <ChevronLeft className="w-5 h-5" />
+              <span className="text-sm font-medium">out</span>
+            </button>
+            
+            <div className="w-px h-4 bg-blue-300/50" />
+            
+            {/* Current container name */}
+            <div className="flex items-center gap-1.5">
+              <FolderOpen className="w-4 h-4 text-blue-500" />
+              <span className="text-sm font-medium text-foreground">
+                {rawNodes[containerPath[containerPath.length - 1]]?.name || 'Container'}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Stats overlay - adjust position when inside container */}
+      <div className={`absolute ${containerPath.length > 0 ? 'top-16' : 'top-3'} left-3 z-50 bg-card/90 backdrop-blur rounded-lg border border-border px-3 py-2 shadow-sm`}>
+        <div className="text-xs text-muted-foreground">
+          {containerPath.length > 0 ? 'Container Total' : 'Total Area'}
+        </div>
         <div className="text-lg font-semibold tabular-nums">
           {layout.totalArea.toLocaleString()}m²
         </div>
         <div className="text-xs text-muted-foreground mt-1">
-          {layout.groups.length} groups · {Object.keys(nodes).length} areas
+          {containerPath.length > 0 
+            ? `${Object.keys(nodes).length} areas inside`
+            : `${layout.groups.length} groups · ${Object.keys(nodes).length} areas`
+          }
         </div>
       </div>
 
@@ -821,6 +892,11 @@ export function AreaBoard() {
                 onDragArea={handleDragArea}
                 onResizeGroup={handleResizeGroup}
                 onDropArea={handleDropArea}
+                onOpenContainer={openContainer}
+                isNodeContainer={(nodeId) => {
+                  const derived = getNodeDerived(nodeId);
+                  return derived?.isContainer ?? false;
+                }}
                 areaOffsets={areaOffsets}
                 offsetX={pos.x}
                 offsetY={pos.y}

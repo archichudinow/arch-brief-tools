@@ -1,7 +1,7 @@
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { useChatStore, useProjectStore, useHistoryStore } from '@/stores';
+import { useChatStore, useProjectStore, useHistoryStore, useUIStore } from '@/stores';
 import type { Proposal } from '@/types';
 import { Check, X, Scissors, GitMerge, Plus, Pencil, FolderPlus, FolderInput, StickyNote, Copy, Percent, Combine, Link } from 'lucide-react';
 
@@ -28,8 +28,10 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
   const deleteGroup = useProjectStore((s) => s.deleteGroup);
   const nodes = useProjectStore((s) => s.nodes);
   const groups = useProjectStore((s) => s.groups);
+  const addChildToContainer = useProjectStore((s) => s.addChildToContainer);
   
   const snapshot = useHistoryStore((s) => s.snapshot);
+  const openContainerId = useUIStore((s) => s.openContainerId);
   
   const handleAccept = () => {
     console.log('Accept clicked for proposal:', proposal);
@@ -56,7 +58,8 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
         const nodesByGroup: Record<string, string[]> = {};
         
         accepted.areas.forEach((area) => {
-          const nodeId = createNode({
+          // Add to container if we're inside one, otherwise add to root
+          const createInput = {
             name: area.name,
             areaPerUnit: area.areaPerUnit,
             count: area.count,
@@ -65,7 +68,12 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
             formulaReasoning: area.formulaReasoning,
             formulaConfidence: area.formulaConfidence,
             formulaType: area.formulaType,
-          });
+          };
+          const nodeId = openContainerId 
+            ? addChildToContainer(openContainerId, createInput) 
+            : createNode(createInput);
+          
+          if (!nodeId) return; // Skip if container add failed
           
           // Collect nodes by groupHint
           if (area.groupHint) {
@@ -78,16 +86,19 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
         
         console.log('Nodes by group:', nodesByGroup);
         
-        // Auto-create groups and assign nodes
-        Object.entries(nodesByGroup).forEach(([groupName, nodeIds]) => {
-          if (nodeIds.length > 0) {
-            console.log(`Creating group "${groupName}" with ${nodeIds.length} nodes:`, nodeIds);
-            const groupId = createGroup({ name: groupName });
-            assignToGroup(groupId, nodeIds);
-          } else {
-            console.warn(`Skipping empty group "${groupName}"`);
-          }
-        });
+        // Auto-create groups and assign nodes - only at root level, not inside containers
+        // When inside a container, the container itself provides the organization
+        if (!openContainerId) {
+          Object.entries(nodesByGroup).forEach(([groupName, nodeIds]) => {
+            if (nodeIds.length > 0) {
+              console.log(`Creating group "${groupName}" with ${nodeIds.length} nodes:`, nodeIds);
+              const groupId = createGroup({ name: groupName });
+              assignToGroup(groupId, nodeIds);
+            } else {
+              console.warn(`Skipping empty group "${groupName}"`);
+            }
+          });
+        }
         break;
       }
         
@@ -114,7 +125,7 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
         const newNodeIds: string[] = [];
         accepted.splits.forEach((split) => {
           console.log('Creating split:', split);
-          const newId = createNode({
+          const createInput = {
             name: split.name,
             areaPerUnit: split.areaPerUnit,
             count: split.count,
@@ -122,36 +133,50 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
             formulaReasoning: split.formulaReasoning,
             formulaConfidence: split.formulaConfidence,
             formulaType: split.formulaType,
-          });
-          newNodeIds.push(newId);
+          };
+          // Add to container if we're inside one, otherwise add to root
+          const newId = openContainerId 
+            ? addChildToContainer(openContainerId, createInput) 
+            : createNode(createInput);
+          if (newId) newNodeIds.push(newId);
         });
         
         // If source was in a group, add new nodes to that same group (inherit color)
-        if (sourceGroupId) {
-          console.log('Assigning splits to existing group:', sourceGroupId);
-          assignToGroup(sourceGroupId, newNodeIds);
-        }
-        // Otherwise, if groupName provided, create new group
-        else if (accepted.groupName) {
-          console.log('Creating new group:', accepted.groupName, 'with nodes:', newNodeIds);
-          const groupId = createGroup({ 
-            name: accepted.groupName, 
-            color: accepted.groupColor || sourceGroupColor || '#3b82f6' 
-          });
-          assignToGroup(groupId, newNodeIds);
+        // Skip group operations when inside a container
+        if (!openContainerId) {
+          if (sourceGroupId) {
+            console.log('Assigning splits to existing group:', sourceGroupId);
+            assignToGroup(sourceGroupId, newNodeIds);
+          }
+          // Otherwise, if groupName provided, create new group
+          else if (accepted.groupName) {
+            console.log('Creating new group:', accepted.groupName, 'with nodes:', newNodeIds);
+            const groupId = createGroup({ 
+              name: accepted.groupName, 
+              color: accepted.groupColor || sourceGroupColor || '#3b82f6' 
+            });
+            assignToGroup(groupId, newNodeIds);
+          }
         }
         break;
       }
         
-      case 'merge_areas':
+      case 'merge_areas': {
         snapshot('ai-merge', `AI: Merge to ${accepted.result.name}`, { nodes, groups });
         accepted.sourceNodeIds.forEach((id) => deleteNode(id));
-        createNode({
+        const mergeInput = {
           name: accepted.result.name,
           areaPerUnit: accepted.result.areaPerUnit,
           count: accepted.result.count,
-        });
+        };
+        // Add to container if we're inside one, otherwise add to root
+        if (openContainerId) {
+          addChildToContainer(openContainerId, mergeInput);
+        } else {
+          createNode(mergeInput);
+        }
         break;
+      }
       
       case 'split_by_quantity': {
         snapshot('ai-split-quantity', `AI: Split ${accepted.sourceName} by quantity (linked)`, { nodes, groups });
@@ -169,6 +194,11 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
         break;
         
       case 'create_groups':
+        // Skip group creation when inside a container - container provides organization
+        if (openContainerId) {
+          console.log('Skipping group creation - inside container');
+          break;
+        }
         snapshot('ai-create-groups', `AI: Create ${accepted.groups.length} groups`, { nodes, groups });
         accepted.groups.forEach((g) => {
           // Only create group if it has members
@@ -183,6 +213,11 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
         break;
         
       case 'assign_to_group':
+        // Skip group assignment when inside a container
+        if (openContainerId) {
+          console.log('Skipping group assignment - inside container');
+          break;
+        }
         snapshot('ai-assign', `AI: Assign to ${accepted.groupName}`, { nodes, groups });
         assignToGroup(accepted.groupId, accepted.nodeIds);
         break;
