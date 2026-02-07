@@ -9,6 +9,9 @@ import type { UUID } from '@/types';
 type PanelType = 'inspector' | 'history' | null;
 type InspectorTab = 'details' | 'notes';
 
+/** Board view mode */
+export type BoardViewMode = 'areas' | 'levels';
+
 /** Detail level for AI program generation */
 export type DetailLevel = 'abstract' | 'standard' | 'detailed';
 
@@ -32,6 +35,7 @@ interface UIState {
   
   // Board interaction mode
   isAddingComment: boolean;
+  boardViewMode: BoardViewMode;  // areas or levels view
   
   // Container navigation
   openContainerId: UUID | null;  // null = root level, shows top-level nodes
@@ -60,6 +64,7 @@ interface UIState {
   
   // Actions - Board interaction
   setAddingComment: (adding: boolean) => void;
+  setBoardViewMode: (mode: BoardViewMode) => void;
   
   // Actions - Container navigation
   openContainer: (id: UUID, path?: UUID[]) => void;  // enter container, optionally with full path
@@ -88,6 +93,7 @@ export const useUIStore = create<UIState>()(
     leftPanelCollapsed: false,
     rightPanelCollapsed: false,
     isAddingComment: false,
+    boardViewMode: 'areas' as BoardViewMode,
     openContainerId: null,
     containerPath: [],
     detailLevel: 'standard',
@@ -197,6 +203,15 @@ export const useUIStore = create<UIState>()(
     setAddingComment: (adding) => {
       set((state) => {
         state.isAddingComment = adding;
+      });
+    },
+
+    setBoardViewMode: (mode) => {
+      set((state) => {
+        state.boardViewMode = mode;
+        // Clear selection when switching views
+        state.selectedNodeIds = [];
+        state.selectedGroupIds = [];
       });
     },
 

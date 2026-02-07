@@ -22,7 +22,7 @@ import type {
   ToolCall,
   ToolResult,
 } from './types';
-import type { AreaNode, Group, CreateAreasProposal, SplitGroupEqualProposal, Proposal } from '@/types';
+import type { AreaNode, Group, CreateAreasProposal, SplitGroupEqualProposal, CreateGroupsProposal, Proposal } from '@/types';
 import { AGENT_TOOLS } from './tools';
 import { actionRegistry, type ActionContext } from '../actions/registry';
 import { formatArea } from '../scaleAnalyzer';
@@ -94,7 +94,8 @@ IMPORTANT RULES:
 - When user pastes a BRIEF or TABLE with area data (sqm, m², quantities), use parse_brief with the COMPLETE TEXT - never summarize or truncate
 - For simple requests like "create a hotel", use create_program ONCE - do not retry if unfold fails
 - When asked to unfold an area, first use find_area to get its ID if not selected
-- When asked to split a group into N parts, use split_group with numberOfGroups
+- When asked to split a group into N parts (equal division), use split_group with numberOfGroups
+- When asked to "split into functional groups", "reorganize by function", or "create subgroups by type", use regroup_by_function - this analyzes areas and creates category-based groups
 - DO NOT call create_program multiple times for the same request
 - Always end with respond_to_user to summarize what was done
 - If you're unsure what the user wants, ask for clarification via respond_to_user
@@ -456,6 +457,212 @@ const toolExecutors: Record<string, ToolExecutor> = {
         totalUnits,
         splitByCount,
         areaPerGroup,
+      },
+      proposals: [proposal],
+      message: description,
+    };
+  },
+  
+  /**
+   * Reorganize a group's areas into functional subgroups
+   * Creates new groups based on area functions/types
+   */
+  async regroup_by_function(args, context, state) {
+    // Find the target group
+    let targetGroup: Group | undefined;
+    
+    if (args.groupId) {
+      targetGroup = context.groups[args.groupId as string];
+    } else if (args.groupName) {
+      const searchName = (args.groupName as string).toLowerCase();
+      targetGroup = Object.values(context.groups).find(
+        g => g.name.toLowerCase().includes(searchName)
+      );
+    } else if (context.selectedGroupIds.length > 0) {
+      targetGroup = context.groups[context.selectedGroupIds[0]];
+    }
+    
+    if (!targetGroup) {
+      return {
+        toolCallId: '',
+        success: false,
+        error: 'Could not find group to reorganize. Please specify groupId, groupName, or select a group.',
+      };
+    }
+    
+    // Get areas in this group
+    const memberIds = targetGroup.members || [];
+    
+    if (memberIds.length === 0) {
+      return {
+        toolCallId: '',
+        success: false,
+        error: `Group "${targetGroup.name}" has no areas to reorganize.`,
+      };
+    }
+    
+    const nodes = memberIds.map(id => context.nodes[id]).filter(Boolean);
+    
+    // If user suggested categories, use them; otherwise, analyze areas
+    const suggestedCategories = args.suggestedCategories as string[] | undefined;
+    
+    // Categorize areas by analyzing their names
+    const categoryMap = new Map<string, typeof nodes>();
+    
+    const functionKeywords: Record<string, string[]> = {
+      'Toilets & Sanitary': ['toilet', 'wc', 'restroom', 'bathroom', 'sanitary', 'lavatory', 'washroom'],
+      'Storage': ['storage', 'store', 'warehouse', 'stockroom', 'inventory', 'archive'],
+      'Circulation': ['corridor', 'circulation', 'hallway', 'lobby', 'foyer', 'entrance', 'passage', 'stairs', 'lift', 'elevator'],
+      'Mechanical & Services': ['mechanical', 'electrical', 'plant', 'hvac', 'utility', 'service', 'maintenance', 'janitor', 'boe', 'mep'],
+      'Administration': ['office', 'admin', 'management', 'reception', 'secretary', 'hr', 'accounting'],
+      'Staff Facilities': ['staff', 'employee', 'locker', 'changing', 'break room', 'canteen', 'cafeteria'],
+      'Meeting & Conference': ['meeting', 'conference', 'boardroom', 'seminar', 'training'],
+      'Parking': ['parking', 'garage', 'car park', 'vehicle'],
+    };
+    
+    // If categories suggested, use those as the keys
+    if (suggestedCategories && suggestedCategories.length > 0) {
+      suggestedCategories.forEach(cat => categoryMap.set(cat, []));
+      categoryMap.set('Other', []);
+    }
+    
+    // Helper to get all text content from node (name + notes)
+    const getNodeTextContent = (node: typeof nodes[0]): string => {
+      const parts: string[] = [node.name];
+      
+      // Add legacy userNote
+      if (node.userNote) {
+        parts.push(node.userNote);
+      }
+      
+      // Add aiNote
+      if (node.aiNote) {
+        parts.push(node.aiNote);
+      }
+      
+      // Add notes array content
+      if (node.notes && node.notes.length > 0) {
+        for (const note of node.notes) {
+          if (note.content) {
+            parts.push(note.content);
+          }
+        }
+      }
+      
+      // Add formula reasoning if present
+      if (node.formulaReasoning) {
+        parts.push(node.formulaReasoning);
+      }
+      
+      return parts.join(' ').toLowerCase();
+    };
+    
+    // Categorize each area
+    for (const node of nodes) {
+      const textContent = getNodeTextContent(node);
+      let assigned = false;
+      
+      if (suggestedCategories && suggestedCategories.length > 0) {
+        // Try to match to suggested categories using full text content
+        for (const cat of suggestedCategories) {
+          const catLower = cat.toLowerCase();
+          if (textContent.includes(catLower) || catLower.includes(node.name.toLowerCase().split(' ')[0])) {
+            const arr = categoryMap.get(cat) || [];
+            arr.push(node);
+            categoryMap.set(cat, arr);
+            assigned = true;
+            break;
+          }
+        }
+        if (!assigned) {
+          const arr = categoryMap.get('Other') || [];
+          arr.push(node);
+          categoryMap.set('Other', arr);
+        }
+      } else {
+        // Auto-categorize using keywords against full text content (name + notes)
+        for (const [category, keywords] of Object.entries(functionKeywords)) {
+          if (keywords.some(kw => textContent.includes(kw))) {
+            const arr = categoryMap.get(category) || [];
+            arr.push(node);
+            categoryMap.set(category, arr);
+            assigned = true;
+            break;
+          }
+        }
+        if (!assigned) {
+          // Use first word of area name as category
+          const firstWord = node.name.split(' ')[0];
+          const cat = firstWord.charAt(0).toUpperCase() + firstWord.slice(1);
+          const arr = categoryMap.get(cat) || [];
+          arr.push(node);
+          categoryMap.set(cat, arr);
+        }
+      }
+    }
+    
+    // Remove empty categories
+    for (const [key, value] of categoryMap.entries()) {
+      if (value.length === 0) {
+        categoryMap.delete(key);
+      }
+    }
+    
+    // If we only have 1 category, not useful
+    if (categoryMap.size <= 1) {
+      return {
+        toolCallId: '',
+        success: false,
+        error: `Could not identify distinct functional categories in "${targetGroup.name}". The areas may already be too specific or homogeneous.`,
+      };
+    }
+    
+    // Generate colors for new groups
+    const colors = [
+      '#3b82f6', '#ef4444', '#22c55e', '#f59e0b', '#8b5cf6', 
+      '#06b6d4', '#ec4899', '#84cc16', '#f97316', '#6366f1'
+    ];
+    let colorIndex = 0;
+    
+    // Create proposal for creating new groups
+    const categoryGroups: { name: string; color: string; memberNodeIds: string[]; memberNames: string[] }[] = [];
+    
+    for (const [category, categoryNodes] of categoryMap.entries()) {
+      if (categoryNodes.length > 0) {
+        categoryGroups.push({
+          name: category,
+          color: colors[colorIndex % colors.length],
+          memberNodeIds: categoryNodes.map(n => n.id),
+          memberNames: categoryNodes.map(n => n.name),
+        });
+        colorIndex++;
+      }
+    }
+    
+    // Create the proposal (using create_groups type)
+    const proposal: CreateGroupsProposal = {
+      id: `regroup-${Date.now()}`,
+      type: 'create_groups',
+      status: 'pending',
+      groups: categoryGroups,
+    };
+    
+    state.proposals.push(proposal);
+    
+    // Build description
+    const categoryDescriptions = categoryGroups.map(g => 
+      `"${g.name}" (${g.memberNodeIds.length} areas)`
+    ).join(', ');
+    
+    const description = `Will reorganize "${targetGroup.name}" into ${categoryGroups.length} functional groups: ${categoryDescriptions}. Original group will be replaced.`;
+    
+    return {
+      toolCallId: '',
+      success: true,
+      result: { 
+        sourceGroup: targetGroup.name,
+        newGroupCount: categoryGroups.length,
+        categories: categoryGroups.map(g => ({ name: g.name, areaCount: g.memberNodeIds.length })),
       },
       proposals: [proposal],
       message: description,

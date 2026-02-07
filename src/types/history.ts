@@ -75,4 +75,8 @@ export type ActionType =
   | 'ai-split-group-prop'
   | 'ai-merge-group'
   | 'delete-areas'
-  | 'delete-groups';
+  | 'delete-groups'
+  | 'create_level'
+  | 'delete_level'
+  | 'split_section'
+  | 'merge_sections';

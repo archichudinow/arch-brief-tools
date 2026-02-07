@@ -4,6 +4,7 @@ import { AreaInspector } from '@/components/area-tools';
 import { GroupInspector } from '@/components/group-tools';
 import { ChatPanel } from '@/components/chat';
 import { AreaBoard } from '@/components/board';
+import { LevelsBoard } from '@/components/levels-board';
 import { useProjectStore, useHistoryStore, useUIStore } from '@/stores';
 import { useEffect } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
@@ -18,6 +19,7 @@ function App() {
   const rightPanelCollapsed = useUIStore((s) => s.rightPanelCollapsed);
   const toggleLeftPanel = useUIStore((s) => s.toggleLeftPanel);
   const toggleRightPanel = useUIStore((s) => s.toggleRightPanel);
+  const boardViewMode = useUIStore((s) => s.boardViewMode);
 
   // Initialize history with initial state
   useEffect(() => {
@@ -145,9 +147,9 @@ function App() {
           )}
         </button>
 
-        {/* Center - Area Board */}
+        {/* Center - Board (Area or Levels) */}
         <div className="flex-1 flex flex-col overflow-hidden">
-          <AreaBoard />
+          {boardViewMode === 'areas' ? <AreaBoard /> : <LevelsBoard />}
         </div>
 
         {/* Right Panel Toggle */}

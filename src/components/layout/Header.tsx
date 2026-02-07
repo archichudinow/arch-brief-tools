@@ -1,4 +1,4 @@
-import { useProjectStore, useHistoryStore } from '@/stores';
+import { useProjectStore, useHistoryStore, useUIStore } from '@/stores';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -51,8 +51,9 @@ export function Header() {
   const [isEditingName, setIsEditingName] = useState(false);
   const { setTheme } = useTheme();
   
-  // View state (future: could be in store)
-  const [activeView, setActiveView] = useState<'board' | 'levels'>('board');
+  // View state from global store
+  const boardViewMode = useUIStore((s) => s.boardViewMode);
+  const setBoardViewMode = useUIStore((s) => s.setBoardViewMode);
 
   const handleExportJSON = () => {
     const json = exportProject();
@@ -194,23 +195,20 @@ export function Header() {
       {/* Center: View Switcher */}
       <div className="flex items-center gap-1 bg-muted/50 rounded-md p-0.5">
         <Button
-          variant={activeView === 'board' ? 'secondary' : 'ghost'}
+          variant={boardViewMode === 'areas' ? 'secondary' : 'ghost'}
           size="sm"
           className="h-7 px-3 text-xs"
-          onClick={() => setActiveView('board')}
+          onClick={() => setBoardViewMode('areas')}
         >
           <LayoutGrid className="h-3.5 w-3.5 mr-1.5" />
           Board
         </Button>
         <Button
-          variant={activeView === 'levels' ? 'secondary' : 'ghost'}
+          variant={boardViewMode === 'levels' ? 'secondary' : 'ghost'}
           size="sm"
           className="h-7 px-3 text-xs"
-          onClick={() => {
-            setActiveView('levels');
-            toast.info('Levels view coming soon');
-          }}
-          title="Program stack per level (coming soon)"
+          onClick={() => setBoardViewMode('levels')}
+          title="Program stack per level"
         >
           <Layers className="h-3.5 w-3.5 mr-1.5" />
           Levels

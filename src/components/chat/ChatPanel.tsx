@@ -104,7 +104,7 @@ export function ChatPanel() {
   const [isEnhancing, setIsEnhancing] = useState(false);
   
   // Formula-based workflow state
-  const [detailLevel, setDetailLevel] = useState<ExpandDetailLevel>('typical');
+  const [detailLevel, setDetailLevel] = useState<ExpandDetailLevel>('abstract');
   const [clarificationPending, setClarificationPending] = useState<{
     originalInput: string;
     message: string;

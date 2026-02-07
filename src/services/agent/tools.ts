@@ -90,7 +90,7 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'split_group',
-      description: `Split a group into multiple equal sub-groups. Use when user wants to divide a group into N equal parts (e.g., "split into 8 groups" or "divide into residential modules"). Works in two modes: (1) If total units >= N, distributes unit counts across groups (e.g., 80 bedrooms → 8 groups of 10 bedrooms each). (2) If total units < N, divides the area m² instead (e.g., 1 reception 10m² → 8 groups each with 1 reception 1.25m²). Always succeeds regardless of area count.`,
+      description: `Split a group into N equal sub-groups numerically. Use when user wants to divide a group into equal NUMBERED parts (e.g., "split into 8 groups", "divide into 4 modules", "create 3 copies"). This splits by COUNT or AREA equally - NOT by function/type. For functional reorganization (e.g., "split by function", "create subgroups by type"), use regroup_by_function instead. Works in two modes: (1) If total units >= N, distributes unit counts equally. (2) If total units < N, divides the m² equally.`,
       parameters: {
         type: 'object',
         properties: {
@@ -112,6 +112,32 @@ export const AGENT_TOOLS: ToolDefinition[] = [
           },
         },
         required: ['numberOfGroups'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'regroup_by_function',
+      description: `Reorganize a group's areas into smaller functional subgroups based on their purpose/type. Use when user says "split into functional groups", "reorganize by function", "break into categories", or "create subgroups based on type". This analyzes area names and purposes to create logical subgroups (e.g., "Supporting facilities" → "Toilets", "Storage", "Circulation"). Does NOT split areas numerically - use split_group for that.`,
+      parameters: {
+        type: 'object',
+        properties: {
+          groupId: {
+            type: 'string',
+            description: 'ID of the group to reorganize. If not provided, uses selected group.',
+          },
+          groupName: {
+            type: 'string',
+            description: 'Name of the group to reorganize. Used if groupId not provided.',
+          },
+          suggestedCategories: {
+            type: 'array',
+            description: 'Optional list of category names to organize into. If not provided, AI will determine categories automatically.',
+            items: { type: 'string' },
+          },
+        },
+        required: [],
       },
     },
   },

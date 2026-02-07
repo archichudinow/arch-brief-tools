@@ -18,6 +18,8 @@ import type {
 import { GROUP_COLORS } from '@/types';
 import { useHistoryStore } from './historyStore';
 
+// Note: useLevelsStore is imported lazily to avoid circular dependency
+
 // ============================================
 // STATE INTERFACE
 // ============================================
@@ -2333,8 +2335,12 @@ export const useProjectStore = create<ProjectState>()(
 
     exportProject: () => {
       const state = get();
+      // Access levels store through global registry to avoid circular import
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const levelsStore = (globalThis as any).__levelsStore;
+      const levelsState = levelsStore?.getState?.() ?? { levels: {}, sections: {}, options: {}, activeOptionId: null };
       const data = {
-        schema_version: '1.1.0',
+        schema_version: '1.3.0',
         meta: state.meta,
         rawInputs: state.rawInputs,
         areaLayer: {
@@ -2344,6 +2350,12 @@ export const useProjectStore = create<ProjectState>()(
           groups: state.groups,
         },
         boardLayout: state.boardLayout,
+        levelsBoard: {
+          levels: levelsState.levels,
+          sections: levelsState.sections,
+          options: levelsState.options,
+          activeOptionId: levelsState.activeOptionId,
+        },
       };
       return JSON.stringify(data, null, 2);
     },
@@ -2371,6 +2383,24 @@ export const useProjectStore = create<ProjectState>()(
           };
         });
 
+        // Import levels board data if available (v1.2.0+)
+        // Access levels store through global registry to avoid circular import
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const levelsStore = (globalThis as any).__levelsStore;
+        if (data.levelsBoard && levelsStore) {
+          levelsStore.setState({
+            levels: data.levelsBoard.levels || {},
+            sections: data.levelsBoard.sections || {},
+            options: data.levelsBoard.options || {},
+            activeOptionId: data.levelsBoard.activeOptionId || null,
+            selectedLevelId: null,
+            selectedSectionIds: [],
+          });
+        } else if (levelsStore) {
+          // Clear levels if not in import
+          levelsStore.getState().clearAll();
+        }
+
         const newState = get();
         useHistoryStore.getState().snapshot('import', 'Imported project', {
           nodes: newState.nodes,
@@ -2393,6 +2423,10 @@ export const useProjectStore = create<ProjectState>()(
         state.boardLayout = initial.boardLayout;
       });
 
+      // Access levels store through global registry to avoid circular import
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const levelsStore = (globalThis as any).__levelsStore;
+      levelsStore?.getState?.().clearAll?.();
       useHistoryStore.getState().reset();
     },
   }))
